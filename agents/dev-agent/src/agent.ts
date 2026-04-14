@@ -81,11 +81,22 @@ export class DevAgent extends DurableObject<Env> {
 	private async appendLogs(taskId: string, chunk: string): Promise<void> {
 		const key = `logs:${taskId}`;
 		const existing = await this.ctx.storage.get<string>(key) ?? "";
-		await this.ctx.storage.put(key, existing + chunk);
+		let updated = existing + chunk;
+		// Cap stored logs at 2MB to prevent DO memory exhaustion.
+		// Older content is trimmed from the front; the tail is most useful for
+		// usage parsing, error detection, and summarization.
+		const MAX_LOG_BYTES = 2 * 1024 * 1024;
+		if (updated.length > MAX_LOG_BYTES) {
+			updated = updated.slice(-MAX_LOG_BYTES);
+		}
+		await this.ctx.storage.put(key, updated);
 	}
 
 	private async archiveTask(task: StoredTask): Promise<void> {
-		const allLogs = await this.ctx.storage.get<string>(`logs:${task.id}`) ?? task.logs ?? "";
+		const rawLogs = await this.ctx.storage.get<string>(`logs:${task.id}`) ?? task.logs ?? "";
+		// Cap archived logs at 512KB to keep R2 objects manageable
+		const MAX_ARCHIVE_LOGS = 512 * 1024;
+		const archiveLogs = rawLogs.length > MAX_ARCHIVE_LOGS ? rawLogs.slice(-MAX_ARCHIVE_LOGS) : rawLogs;
 
 		const archive = {
 			id: task.id,
@@ -103,7 +114,7 @@ export class DevAgent extends DurableObject<Env> {
 			summary: task.summary ?? null,
 			diff: task.diff ?? null,
 			prUrl: task.prUrl ?? null,
-			logs: allLogs,
+			logs: archiveLogs,
 			error: task.error ?? null,
 			usage: task.usage ?? null,
 		};
@@ -1103,7 +1114,6 @@ export class DevAgent extends DurableObject<Env> {
 					task.outcome = "error";
 					task.step = "failed:claude-cli";
 					task.error = cliError;
-					task.logs = allLogs;
 					console.error(`[${task.id}] Claude CLI startup failure: ${cliError}`);
 					await this.saveTask(task);
 					await destroySandbox(this.env, task.id);
@@ -1117,7 +1127,6 @@ export class DevAgent extends DurableObject<Env> {
 			if (isTestMode) {
 				task.status = "completed";
 				task.step = "done";
-				task.logs = allLogs;
 				task.outcome = "no_changes";
 				task.summary = "Test task completed successfully.";
 				console.log(`[${task.id}] TEST completed. Logs: ${allLogs.length} chars`);
@@ -1130,7 +1139,6 @@ export class DevAgent extends DurableObject<Env> {
 			if (isResearchMode) {
 				task.status = "completed";
 				task.step = "done";
-				task.logs = allLogs;
 				task.outcome = "research_complete";
 
 				// Extract the analysis from Claude's output (last text result)
@@ -1199,7 +1207,6 @@ export class DevAgent extends DurableObject<Env> {
 
 				task.status = "completed";
 				task.step = "done";
-				task.logs = allLogs;
 				task.diff = diff;
 				task.summary = summary;
 				task.prUrl = prUrl ?? undefined;
@@ -1216,7 +1223,6 @@ export class DevAgent extends DurableObject<Env> {
 				task.step = `failed:${task.step}`;
 				task.error = err instanceof Error ? err.message : String(err);
 				task.outcome = "error";
-				task.logs = allLogs;
 				console.error(`[${task.id}] Finalize failed:`, task.error);
 				await destroySandbox(this.env, task.id);
 			}
