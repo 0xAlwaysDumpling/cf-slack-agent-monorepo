@@ -41,6 +41,9 @@
 			"new_sqlite_classes": ["Sandbox", "DevAgent"]
 		}
 	],
+	"triggers": {
+		"crons": ["*/5 * * * *"]
+	},
 	"r2_buckets": [
 		{
 			"binding": "SESSIONS_BUCKET",

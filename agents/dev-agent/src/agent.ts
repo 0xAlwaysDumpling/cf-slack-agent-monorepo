@@ -360,11 +360,28 @@ export class DevAgent extends DurableObject<Env> {
 			};
 		}
 
+		// Find the first step that still needs work
+		let startIndex = 0;
+		while (startIndex < plan.steps.length) {
+			const s = plan.steps[startIndex].status;
+			if (s === "completed" || s === "merged") {
+				startIndex++;
+			} else {
+				break;
+			}
+		}
+
+		if (startIndex >= plan.steps.length) {
+			plan.status = "completed";
+			await this.savePlan(plan);
+			return this.planToResult(plan);
+		}
+
 		plan.status = "running";
-		plan.currentStepIndex = 0;
+		plan.currentStepIndex = startIndex;
 		await this.savePlan(plan);
 
-		await this.startPlanStep(plan, 0);
+		await this.startPlanStep(plan, startIndex);
 		return this.planToResult(await this.getPlan(planId) as Plan);
 	}
 
@@ -608,6 +625,25 @@ export class DevAgent extends DurableObject<Env> {
 		return this.toResult(task);
 	}
 
+	async deleteTask(taskId: string): Promise<{ ok: boolean; error?: string } | null> {
+		const task = await this.getTask(taskId);
+		if (!task) return null;
+
+		if (task.status === "running" || task.status === "pending") {
+			await this.cancelTask(taskId);
+		}
+
+		await this.ctx.storage.delete(`${STORAGE_KEY_TASK_PREFIX}${taskId}`);
+		await this.ctx.storage.delete(`logs:${taskId}`);
+
+		const activeIds = (await this.ctx.storage.get<string[]>(STORAGE_KEY_ACTIVE_TASK_IDS)) ?? [];
+		const filtered = activeIds.filter((id) => id !== taskId);
+		await this.ctx.storage.put(STORAGE_KEY_ACTIVE_TASK_IDS, filtered);
+
+		console.log(`[${taskId}] Deleted (was ${task.status})`);
+		return { ok: true };
+	}
+
 	async continueTask(priorTaskId: string): Promise<TaskResult> {
 		const prior = await this.getTask(priorTaskId)
 			?? await this.getArchivedTask(priorTaskId) as (Record<string, unknown> & { repo?: string; task?: string; status?: string; branch?: string; planId?: string }) | null;
@@ -744,6 +780,118 @@ export class DevAgent extends DurableObject<Env> {
 		if (hasActive) {
 			await this.ctx.storage.setAlarm(Date.now() + POLL_INTERVAL_MS);
 		}
+	}
+
+	// =========================================================================
+	// Watchdog: CRON-triggered health check for stuck/orphaned tasks & plans
+	// =========================================================================
+
+	async watchdog(): Promise<{ cleaned: string[]; retriggered: string[]; alarmRestored: boolean }> {
+		const cleaned: string[] = [];
+		const retriggered: string[] = [];
+		let alarmRestored = false;
+
+		const activeIds = (await this.ctx.storage.get<string[]>(STORAGE_KEY_ACTIVE_TASK_IDS)) ?? [];
+		const now = Date.now();
+		let hasActive = false;
+
+		for (const id of activeIds) {
+			const task = await this.getTask(id);
+			if (!task) continue;
+
+			// 1) Running/pending tasks still need an alarm
+			if (task.status === "running" || (task.status === "pending" && task.step === "queued")) {
+				hasActive = true;
+
+				// Check for stale running tasks that exceeded the timeout but alarm never fired
+				if (task.status === "running") {
+					const age = now - new Date(task.createdAt).getTime();
+					if (age > STALE_TASK_THRESHOLD_MS) {
+						console.warn(`[watchdog] Task ${id} exceeded timeout (${Math.round(age / 1000)}s), cleaning up`);
+
+						if (task.repoDir && task.branchName) {
+							await checkpointSandbox(this.env, id, task.repoDir, task.branchName);
+						}
+
+						task.status = "failed";
+						task.outcome = "timeout";
+						task.error = `Watchdog: task timed out at step "${task.step}" (${Math.round(age / 1000)}s)`;
+						task.logs = await this.ctx.storage.get<string>(`logs:${id}`) ?? "";
+						await this.saveTask(task);
+						await destroySandbox(this.env, id);
+
+						if (task.planId) await this.onTaskCompleted(task);
+						await this.notifySlack(task);
+						await this.archiveTask(task);
+						cleaned.push(id);
+						hasActive = false;
+						continue;
+					}
+				}
+				continue;
+			}
+
+			// 2) Failed tasks that belong to a plan — check if the plan got stuck
+			if (task.planId && (task.status === "failed" || task.status === "completed")) {
+				const plan = await this.getPlan(task.planId);
+				if (plan && plan.status === "running") {
+					const stepIdx = plan.steps.findIndex((s) => s.taskId === id);
+					if (stepIdx >= 0) {
+						const step = plan.steps[stepIdx];
+						// Plan step still shows "running" but task is done — advancement was missed
+						if (step.status === "running") {
+							console.warn(`[watchdog] Plan ${plan.id} step ${stepIdx} stuck (task ${id} is ${task.status}), re-advancing`);
+							await this.onTaskCompleted(task);
+							retriggered.push(`plan:${plan.id}:step:${stepIdx}`);
+						}
+					}
+				}
+			}
+		}
+
+		// 3) Check for running plans whose current step has no active task
+		const planIds = (await this.ctx.storage.get<string[]>(STORAGE_KEY_ACTIVE_PLAN_IDS)) ?? [];
+		for (const planId of planIds) {
+			const plan = await this.getPlan(planId);
+			if (!plan || plan.status !== "running") continue;
+
+			const currentStep = plan.steps[plan.currentStepIndex ?? 0];
+			if (!currentStep || currentStep.status !== "running") continue;
+
+			if (currentStep.taskId) {
+				const task = await this.getTask(currentStep.taskId);
+				// Task doesn't exist in DO storage anymore (evicted?) — mark step failed and retry
+				if (!task) {
+					console.warn(`[watchdog] Plan ${planId} step ${plan.currentStepIndex} has missing task ${currentStep.taskId}, retriggering`);
+					currentStep.status = "pending";
+					currentStep.taskId = undefined;
+					currentStep.retryCount = (currentStep.retryCount ?? 0) + 1;
+					await this.savePlan(plan);
+					await this.startPlanStep(plan, plan.currentStepIndex ?? 0);
+					retriggered.push(`plan:${planId}:step:${plan.currentStepIndex}`);
+					hasActive = true;
+				}
+			} else {
+				// Step is "running" but has no taskId — start it
+				console.warn(`[watchdog] Plan ${planId} step ${plan.currentStepIndex} running with no task, starting`);
+				await this.startPlanStep(plan, plan.currentStepIndex ?? 0);
+				retriggered.push(`plan:${planId}:step:${plan.currentStepIndex}`);
+				hasActive = true;
+			}
+		}
+
+		// 4) Ensure alarm is set if there are active tasks/plans
+		if (hasActive) {
+			const currentAlarm = await this.ctx.storage.getAlarm();
+			if (!currentAlarm) {
+				console.log("[watchdog] Restoring missing alarm for active tasks");
+				await this.ctx.storage.setAlarm(now + 1000);
+				alarmRestored = true;
+			}
+		}
+
+		console.log(`[watchdog] Done. Cleaned: ${cleaned.length}, Retriggered: ${retriggered.length}, Alarm restored: ${alarmRestored}`);
+		return { cleaned, retriggered, alarmRestored };
 	}
 
 	private async startQueuedTask(task: StoredTask): Promise<void> {
@@ -1362,15 +1510,22 @@ export class DevAgent extends DurableObject<Env> {
 		const plan = await this.getPlan(planId);
 		if (!plan) return null;
 
-		if (plan.status !== "failed") {
+		if (plan.status === "draft") {
 			return {
 				...this.planToResult(plan),
-				error: `Cannot reset — plan status is "${plan.status}", must be "failed"`,
+				error: `Plan is already in draft state`,
 			};
 		}
 
+		// Cancel any running tasks before resetting
 		for (const step of plan.steps) {
-			if (step.status === "failed" || step.status === "running") {
+			if (step.taskId && step.status === "running") {
+				await this.cancelTask(step.taskId);
+			}
+		}
+
+		for (const step of plan.steps) {
+			if (step.status === "failed" || step.status === "running" || step.status === "pending") {
 				step.status = "pending";
 				step.taskId = undefined;
 				step.prUrl = undefined;

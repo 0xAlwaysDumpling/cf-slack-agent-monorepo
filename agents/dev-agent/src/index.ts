@@ -59,6 +59,9 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 		if (method === "GET") {
 			return handleGetTask(env, taskId);
 		}
+		if (method === "DELETE") {
+			return handleDeleteTask(env, taskId);
+		}
 	}
 
 	const sessionMatch = path.match(/^\/tasks\/([a-zA-Z0-9-]+)\/session$/);
@@ -80,6 +83,12 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 
 	if (method === "GET" && path === "/sessions") {
 		return handleListSessions(env);
+	}
+
+	// --- Watchdog ---
+
+	if (method === "POST" && path === "/watchdog") {
+		return handleWatchdog(env);
 	}
 
 	// --- Plan routes ---
@@ -233,6 +242,13 @@ async function handleGetSession(env: Env, taskId: string): Promise<Response> {
 	return json(archived);
 }
 
+async function handleDeleteTask(env: Env, taskId: string): Promise<Response> {
+	const agent = getAgent(env);
+	const result = await agent.deleteTask(taskId);
+	if (!result) return error("Task not found", 404);
+	return json(result);
+}
+
 async function handleCancelTask(env: Env, taskId: string): Promise<Response> {
 	const agent = getAgent(env);
 	const result = await agent.cancelTask(taskId);
@@ -253,6 +269,14 @@ async function handleListSessions(env: Env): Promise<Response> {
 	const agent = getAgent(env);
 	const sessions = await agent.listSessions();
 	return json({ sessions });
+}
+
+// --- Watchdog handler ---
+
+async function handleWatchdog(env: Env): Promise<Response> {
+	const agent = getAgent(env);
+	const result = await agent.watchdog();
+	return json(result);
 }
 
 // --- Research / Audit handlers ---
@@ -511,5 +535,11 @@ export default {
 			console.error("Unhandled error:", err);
 			return error("Internal server error", 500);
 		}
+	},
+
+	async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
+		console.log("[watchdog] CRON triggered");
+		const agent = getAgent(env);
+		await agent.watchdog();
 	},
 };
