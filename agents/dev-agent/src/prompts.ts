@@ -1,5 +1,5 @@
 import type { PlanStep } from "./types";
-import { BASE_SYSTEM_PROMPT, BASE_PLAN_SYSTEM_PROMPT } from "./prompts/defaults";
+import { BASE_SYSTEM_PROMPT, BASE_PLAN_SYSTEM_PROMPT, GUARDRAILS } from "./prompts/defaults";
 
 const R2_PREFIX = "prompts";
 
@@ -55,11 +55,11 @@ export class PromptManager {
 	): Promise<{ content: string; source: "repo" | "default" | "hardcoded" }> {
 		if (repoUrl) {
 			const repoPrompt = await this.get(type, repoUrl);
-			if (repoPrompt) return { content: repoPrompt, source: "repo" };
+			if (repoPrompt) return { content: repoPrompt + GUARDRAILS, source: "repo" };
 		}
 
 		const defaultPrompt = await this.get(type);
-		if (defaultPrompt) return { content: defaultPrompt, source: "default" };
+		if (defaultPrompt) return { content: defaultPrompt + GUARDRAILS, source: "default" };
 
 		const hardcoded = type === "plan" ? BASE_PLAN_SYSTEM_PROMPT : BASE_SYSTEM_PROMPT;
 		return { content: hardcoded, source: "hardcoded" };

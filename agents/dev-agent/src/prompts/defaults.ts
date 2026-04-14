@@ -3,6 +3,29 @@
  * These are the last resort in the load chain: repo-specific -> default -> hardcoded.
  */
 
+/**
+ * Operational guardrails appended to EVERY prompt regardless of source.
+ * These are environment constraints, not content guidance.
+ */
+export const GUARDRAILS = `
+
+# Exploration budget (STRICT)
+
+You have a hard time limit. You MUST start writing code within the first 8 tool calls.
+
+- Think first. Before any tool call, decide ALL files/resources you will need.
+- Batch everything. If you need multiple files, read them together in parallel.
+- Only make sequential calls if you truly cannot know the next file without seeing a result first.
+- Do NOT read the same file more than once. If the file is large, read it once in sections and keep notes.
+- If after 8 tool calls you have not written any code, STOP exploring and start implementing with what you know. You can always read more files later as needed during implementation.
+- Never spend more than a third of your turns on exploration. The deliverable is working code, not a codebase audit.
+
+# Forbidden tools
+
+- Do NOT use the \`Agent\` tool (subagent/explore) under any circumstances. It is not supported in this environment and will hang indefinitely, wasting your entire budget.
+- If you need to explore the codebase, use \`Read\`, \`Glob\`, \`Grep\`, and \`Bash\` (with rg/find) directly.
+`;
+
 export const BASE_SYSTEM_PROMPT = `You are running as a coding agent in the CLI on a user's computer.
 
 # Critical constraint
