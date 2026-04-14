@@ -185,7 +185,7 @@ The agent uses this token for: cloning repos, creating branches, pushing commits
 | `dev-agent-sessions` | R2 Bucket | dev-agent |
 | `slack-agent-prompts` | R2 Bucket | slack-agent |
 | `slack-agent-messages` | R2 Bucket | slack-agent |
-| `leaderboard-db` | D1 Database | slack-agent |
+| `agent-db` | D1 Database | slack-agent |
 
 ## Manual Setup
 
@@ -200,7 +200,7 @@ If you prefer not to use the setup script:
 
 2. Create D1 database:
    ```bash
-   npx wrangler d1 create leaderboard-db
+   npx wrangler d1 create agent-db
    # Note the database_id from the output
    ```
 

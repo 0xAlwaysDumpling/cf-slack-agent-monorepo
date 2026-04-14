@@ -93,7 +93,7 @@ create_r2_bucket "slack-agent-prompts"
 create_r2_bucket "slack-agent-messages"
 
 # D1 database
-D1_DB_NAME="leaderboard-db"
+D1_DB_NAME="agent-db"
 EXISTING_DB_ID=$(npx wrangler d1 list --json 2>/dev/null | node -e "
   let buf=''; process.stdin.on('data',d=>buf+=d); process.stdin.on('end',()=>{
     try { const dbs=JSON.parse(buf); const db=dbs.find(d=>d.name==='$D1_DB_NAME');

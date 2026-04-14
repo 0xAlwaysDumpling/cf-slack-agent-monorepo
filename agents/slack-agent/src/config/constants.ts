@@ -1,10 +1,10 @@
 // ---------------------------------------------------------------------------
 // Organization / Identity
 // ---------------------------------------------------------------------------
-export const ORG_DISPLAY_NAME = "Nostalgic Studios";
-export const GITHUB_ORG = "Nostalgic-Studios";
 export const AGENT_ID = "cf-slack-agent";
 export const DEFAULT_TEAM_ID = "default";
+// Set to your GitHub org login if you want tools to default to it, or leave empty.
+export const GITHUB_ORG = "";
 
 // ---------------------------------------------------------------------------
 // API URLs
@@ -22,7 +22,6 @@ export const DEFAULT_GIT_BRANCH = "main";
 // LLM / Agent limits
 // ---------------------------------------------------------------------------
 export const MAX_AGENT_TOOL_STEPS = 10;
-export const MAX_REPORT_TOOL_STEPS = 15;
 export const MAX_THREAD_MESSAGES = 40;
 export const MAX_TOOL_RESULT_CHARS = 8000;
 export const CONTEXT_BUDGET_TOKENS = 160000;
@@ -35,11 +34,6 @@ export const COMPACT_MIN_DROPPED_MESSAGES = 4;
 export const IMAGE_MAX_BYTES = 20 * 1024 * 1024;
 export const IMAGE_MAX_WIDTH = 1920;
 export const IMAGE_MAX_HEIGHT = 1920;
-
-// ---------------------------------------------------------------------------
-// Slack
-// ---------------------------------------------------------------------------
-export const DEFAULT_REPORT_CHANNEL_ID = "C0ANH1WT30V";
 
 // ---------------------------------------------------------------------------
 // Railway defaults
@@ -60,7 +54,6 @@ export const GITHUB_OPEN_PRS_PER_PAGE = 5;
 // ---------------------------------------------------------------------------
 export const PROMPT_KEY_MENTIONED = "mentioned";
 export const PROMPT_KEY_THREAD_REPLY = "threadReply";
-export const PROMPT_KEY_DAILY_REPORT = "dailyReport";
 export const PROMPT_KEY_IDEAS_CHANNEL = "ideasChannel";
 export const PROMPT_KEY_PLANNER = "planner";
 
@@ -85,5 +78,4 @@ export const CHARS_PER_TOKEN_ESTIMATE = 4;
 // ---------------------------------------------------------------------------
 // Storage / KV keys
 // ---------------------------------------------------------------------------
-export const KV_KEY_REPORT_CONFIGS = "report_configs";
 export const KV_KEY_TOOL_GRAPH_HASH = "tool_graph_hash";

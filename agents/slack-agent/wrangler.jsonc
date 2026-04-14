@@ -38,7 +38,7 @@
 	"d1_databases": [
 		{
 			"binding": "JOBS_DB",
-			"database_name": "leaderboard-db",
+			"database_name": "agent-db",
 			"database_id": "YOUR_D1_DATABASE_ID"
 		}
 	],

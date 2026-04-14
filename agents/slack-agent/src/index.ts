@@ -28,8 +28,6 @@ import { createResourceMCPTools } from "./tools/mcp-handlers/resources";
 import { createHistoryMCPTools } from "./tools/mcp-handlers/history";
 import { WorkTracker } from "./work/tracker";
 import type { CallbackPayload } from "./work/types";
-import { ReportRunner } from "./reports/runner";
-import type { ReportConfig } from "./reports/types";
 import { MessageStore } from "./messages/store";
 import { buildThreadContext, injectCompactSummary } from "./messages/context";
 import { compactMessages } from "./messages/compact";
@@ -37,33 +35,19 @@ import type { StoreMessageInput } from "./messages/types";
 import {
   AGENT_ID,
   DEFAULT_TEAM_ID,
-  DEFAULT_REPORT_CHANNEL_ID,
   MAX_AGENT_TOOL_STEPS,
   MAX_TOOL_RESULT_CHARS,
   CONTEXT_BUDGET_TOKENS,
   IMAGE_MAX_BYTES,
   IMAGE_MAX_WIDTH,
   IMAGE_MAX_HEIGHT,
-  KV_KEY_REPORT_CONFIGS,
   KV_KEY_TOOL_GRAPH_HASH,
   PROMPT_KEY_MENTIONED,
   PROMPT_KEY_THREAD_REPLY,
-  PROMPT_KEY_DAILY_REPORT,
   CHANNEL_CONFIGS,
 } from "./config/constants";
 
 const unified = createUnified();
-
-const DEFAULT_REPORT_CONFIGS: ReportConfig[] = [
-  {
-    id: "apy-farm-daily",
-    name: "APY Farm Daily",
-    schedule: "0 13 * * *",
-    channel: DEFAULT_REPORT_CHANNEL_ID,
-    promptKey: PROMPT_KEY_DAILY_REPORT,
-    enabled: true,
-  },
-];
 
 type SlackFile = {
   id: string;
@@ -551,102 +535,9 @@ export class MyAgent extends SlackAgent {
     return { rest: text };
   }
 
-  // ---------------------------------------------------------------------------
-  // Scheduled reporting
-  // ---------------------------------------------------------------------------
-
-  private async getReportConfigs(): Promise<ReportConfig[]> {
-    const raw = await this.ctx.storage.kv.get(KV_KEY_REPORT_CONFIGS);
-    if (!raw) {
-      await this.saveReportConfigs(DEFAULT_REPORT_CONFIGS);
-      return [...DEFAULT_REPORT_CONFIGS];
-    }
-    try {
-      const configs = JSON.parse(raw as string) as ReportConfig[];
-      if (configs.length === 0) {
-        await this.saveReportConfigs(DEFAULT_REPORT_CONFIGS);
-        return [...DEFAULT_REPORT_CONFIGS];
-      }
-      return configs;
-    } catch {
-      await this.saveReportConfigs(DEFAULT_REPORT_CONFIGS);
-      return [...DEFAULT_REPORT_CONFIGS];
-    }
-  }
-
-  private async saveReportConfigs(configs: ReportConfig[]) {
-    await this.ctx.storage.kv.put(KV_KEY_REPORT_CONFIGS, JSON.stringify(configs));
-  }
-
   async onStart() {
     this.ensureInitialized();
-
-    // Publish tool catalog to R2 so other workers can discover available tools
     await this.syncToolGraphToR2();
-
-    // One-time migration: fix stale config id from "apyfarm-daily" -> "apy-farm-daily"
-    const migrated = await this.ctx.storage.kv.get("report_config_migrated_v1");
-    if (!migrated) {
-      await this.ctx.storage.kv.delete(KV_KEY_REPORT_CONFIGS);
-      await this.ctx.storage.kv.put("report_config_migrated_v1", "true");
-    }
-
-    let configs = await this.getReportConfigs();
-
-    if (configs.length === 0) {
-      configs = DEFAULT_REPORT_CONFIGS;
-      await this.saveReportConfigs(configs);
-      console.log(`[onStart] Seeded ${configs.length} default report config(s)`);
-    }
-
-    const existingSchedules = this.getSchedules();
-
-    for (const config of configs) {
-      if (!config.enabled) continue;
-
-      const alreadyScheduled = existingSchedules.some(
-        (s) => s.callback === "runReport" && (s.payload as any)?.reportId === config.id
-      );
-      if (alreadyScheduled) continue;
-
-      await this.schedule(config.schedule, "runReport", { reportId: config.id });
-      console.log(`[onStart] Scheduled report "${config.name}" (${config.schedule}) -> #${config.channel}`);
-    }
-  }
-
-  async runReport(payload: { reportId: string }) {
-    this.ensureInitialized();
-
-    const configs = await this.getReportConfigs();
-    const config = configs.find((c) => c.id === payload.reportId);
-    if (!config || !config.enabled) {
-      console.log(`[runReport] Report ${payload.reportId} not found or disabled, skipping`);
-      return;
-    }
-
-    console.log(`[runReport] Generating report "${config.name}" for channel ${config.channel}`);
-
-    try {
-      await this.keepAliveWhile(async () => {
-        const runner = new ReportRunner({
-          env: this.getEnv(),
-          promptManager: this.promptManager!,
-        });
-
-        const result = await runner.run(config);
-        console.log(`[runReport] Report generated in ${result.durationMs}ms, tools used: ${result.toolsUsed.join(", ")}`);
-
-        await this.sendMessage(result.text, { channel: config.channel });
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      const stack = err instanceof Error ? err.stack?.split("\n").slice(0, 4).join("\n") : "";
-      console.error(`[runReport] Failed to generate report ${payload.reportId}:`, err);
-      await this.sendMessage(
-        `*Report ${config.name} failed*\n\`\`\`\n${msg}${stack ? "\n" + stack : ""}\n\`\`\``,
-        { channel: config.channel },
-      );
-    }
   }
 
   private async handleScheduleCommand(
@@ -657,88 +548,6 @@ export class MyAgent extends SlackAgent {
     const stripped = text.replace(/<@[A-Z0-9]+>/g, "").trim();
     const lower = stripped.toLowerCase();
 
-    if (lower === "list reports") {
-      const configs = await this.getReportConfigs();
-      const schedules = this.getSchedules();
-
-      if (configs.length === 0) {
-        await this.sendMessage("No reports configured.", { channel, thread_ts: threadTs });
-        return true;
-      }
-
-      const lines = configs.map((c) => {
-        const sched = schedules.find(
-          (s) => s.callback === "runReport" && (s.payload as any)?.reportId === c.id
-        );
-        const nextRun = sched ? new Date(sched.time * 1000).toISOString() : "not scheduled";
-        const status = c.enabled ? "active" : "paused";
-        return `• *${c.name}* — \`${c.schedule}\` — ${status} — next: ${nextRun}`;
-      });
-
-      await this.sendMessage(lines.join("\n"), { channel, thread_ts: threadTs });
-      return true;
-    }
-
-    // Match case-insensitively but extract values from original text to preserve case
-    const scheduleMatch = stripped.match(
-      /^schedule report\s+"([^"]+)"\s+(\S+)\s+(\S+)\s+(.+)$/i
-    );
-    if (scheduleMatch) {
-      const [, name, channelId, promptKey, cronExpr] = scheduleMatch;
-      const id = name.replace(/\s+/g, "-").toLowerCase();
-
-      const configs = await this.getReportConfigs();
-      const existing = configs.findIndex((c) => c.id === id);
-      const config: ReportConfig = {
-        id,
-        name,
-        schedule: cronExpr,
-        channel: channelId,
-        promptKey,
-        enabled: true,
-      };
-
-      if (existing >= 0) {
-        configs[existing] = config;
-      } else {
-        configs.push(config);
-      }
-
-      await this.saveReportConfigs(configs);
-      await this.schedule(cronExpr, "runReport", { reportId: id });
-      await this.sendMessage(
-        `Report *${name}* scheduled: \`${cronExpr}\` -> <#${channelId}> using prompt \`${promptKey}\``,
-        { channel, thread_ts: threadTs },
-      );
-      return true;
-    }
-
-    const stopMatch = stripped.match(/^stop report\s+"?([^"]+)"?$/i);
-    if (stopMatch) {
-      const name = stopMatch[1].trim();
-      const id = name.replace(/\s+/g, "-").toLowerCase();
-
-      const configs = await this.getReportConfigs();
-      const config = configs.find((c) => c.id === id);
-      if (!config) {
-        await this.sendMessage(`Report "${name}" not found.`, { channel, thread_ts: threadTs });
-        return true;
-      }
-
-      config.enabled = false;
-      await this.saveReportConfigs(configs);
-
-      const schedules = this.getSchedules();
-      for (const s of schedules) {
-        if (s.callback === "runReport" && (s.payload as any)?.reportId === id) {
-          await this.cancelSchedule(s.id);
-        }
-      }
-
-      await this.sendMessage(`Report *${config.name}* stopped.`, { channel, thread_ts: threadTs });
-      return true;
-    }
-
     if (lower === "sync tools") {
       const wrote = await this.syncToolGraphToR2(true);
       const tools = this.mcpBridge!.getTools();
@@ -748,28 +557,6 @@ export class MyAgent extends SlackAgent {
           : `Tool graph already up to date (${tools.length} tools).`,
         { channel, thread_ts: threadTs },
       );
-      return true;
-    }
-
-    const runMatch = stripped.match(/^run report\s+"?([^"]+)"?$/i);
-    if (runMatch) {
-      const name = runMatch[1].trim();
-      const id = name.replace(/\s+/g, "-").toLowerCase();
-
-      const configs = await this.getReportConfigs();
-      const config = configs.find((c) => c.id === id);
-      if (!config) {
-        await this.sendMessage(`Report "${name}" not found. Use \`list reports\` to see available reports.`, { channel, thread_ts: threadTs });
-        return true;
-      }
-
-      await this.sendMessage(`Running report *${config.name}* now...`, { channel, thread_ts: threadTs });
-      try {
-        await this.runReport({ reportId: config.id });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        await this.sendMessage(`Report failed: \`${msg}\``, { channel, thread_ts: threadTs });
-      }
       return true;
     }
 
