@@ -122,43 +122,61 @@ pnpm deploy:agent-view
 
 | Variable | Description | Where to find it |
 |----------|-------------|------------------|
-| `CF_ACCOUNT_ID` | Your Cloudflare account ID | [Cloudflare Dashboard](https://dash.cloudflare.com) > Account Home |
-| `CF_SUBDOMAIN` | Your workers.dev subdomain (e.g. `my-account` from `my-account.workers.dev`) | [Cloudflare Dashboard](https://dash.cloudflare.com) > Workers & Pages |
+| `CF_ACCOUNT_ID` | Your Cloudflare account ID | [Dashboard](https://dash.cloudflare.com) > Account Home > Account ID |
+| `CF_SUBDOMAIN` | Your workers.dev subdomain (e.g. `my-account` from `my-account.workers.dev`) | [Dashboard](https://dash.cloudflare.com) > Workers & Pages > Your subdomain |
+
+### Cloudflare API Token (for CI deployment)
+
+Set `CLOUDFLARE_API_TOKEN` as a GitHub Actions secret. Create a [custom API token](https://dash.cloudflare.com/profile/api-tokens) with these permissions:
+
+| Permission | Access |
+|------------|--------|
+| Account > Workers Scripts | Edit |
+| Account > Workers R2 Storage | Edit |
+| Account > D1 | Edit |
+| Account > Cloudflare Pages | Edit |
+| Zone > Workers Routes | Edit |
 
 ### Cloudflare AI Gateway
 
-| Variable | Description | Where to find it |
-|----------|-------------|------------------|
-| `CF_AIG_TOKEN` | AI Gateway authentication token | [AI Gateway settings](https://dash.cloudflare.com) > AI > AI Gateway |
-| `CF_GATEWAY` | Gateway name | Same page as above |
+| Variable | Required permissions | Where to find it |
+|----------|---------------------|------------------|
+| `CF_AIG_TOKEN` | AI Gateway API key -- used to route model inference through your gateway. Create one in your gateway's settings under "API Key". | [Dashboard](https://dash.cloudflare.com) > AI > AI Gateway > your gateway > Settings |
+| `CF_GATEWAY` | N/A (just the gateway name) | Same page |
 
 ### Slack
 
-| Variable | Description | Where to find it |
-|----------|-------------|------------------|
-| `SLACK_CLIENT_ID` | OAuth Client ID | [Slack App settings](https://api.slack.com/apps) > Basic Information |
-| `SLACK_CLIENT_SECRET` | OAuth Client Secret | Same page |
-| `SLACK_SIGNING_SECRET` | Request signing secret | Same page |
+Created automatically during `pnpm run setup`. The setup script opens the Slack app creation page and prompts you to paste these back.
+
+| Variable | Description |
+|----------|-------------|
+| `SLACK_CLIENT_ID` | OAuth Client ID (Basic Information > App Credentials) |
+| `SLACK_CLIENT_SECRET` | OAuth Client Secret (same section) |
+| `SLACK_SIGNING_SECRET` | Request signing secret (same section) |
+
+The app is created with these bot scopes: `app_mentions:read`, `channels:history`, `chat:write`, `chat:write.public`, `groups:history`, `im:write`, `im:history`, `files:read`.
 
 ### Anthropic
 
-| Variable | Description | Where to find it |
-|----------|-------------|------------------|
-| `ANTHROPIC_API_KEY` | Claude API key | [Anthropic Console](https://console.anthropic.com/settings/keys) |
+| Variable | Required permissions | Where to find it |
+|----------|---------------------|------------------|
+| `ANTHROPIC_API_KEY` | Standard API key with access to Claude models. No special permissions needed beyond default. | [Anthropic Console](https://console.anthropic.com/settings/keys) |
 
 ### GitHub
 
-| Variable | Description | Where to find it |
-|----------|-------------|------------------|
-| `GITHUB_TOKEN` | Personal access token (scopes: `repo`, `read:org`) | [GitHub Settings](https://github.com/settings/tokens) |
+| Variable | Required scopes | Where to create |
+|----------|----------------|-----------------|
+| `GITHUB_TOKEN` | **Fine-grained PAT (recommended):** Repository access to repos you want the agent to work on, with permissions: Contents (read/write), Pull requests (read/write), Issues (read/write), Metadata (read). **Classic PAT:** `repo`, `read:org` | [GitHub Settings](https://github.com/settings/tokens) |
+
+The agent uses this token for: cloning repos, creating branches, pushing commits, creating/merging PRs, reading file contents, searching code, listing deployments and check runs.
 
 ### Other
 
 | Variable | Description | Notes |
 |----------|-------------|-------|
-| `PROXY_JWT_SECRET` | JWT secret for sandbox proxy | Auto-generated if empty |
+| `PROXY_JWT_SECRET` | JWT secret for sandbox proxy | Auto-generated during setup if empty |
 | `AUTH_PASSWORD` | Password for the agent-view dashboard | Choose any password |
-| `RAILWAY_API_TOKEN` | Railway API token (optional) | [Railway](https://railway.com/account/tokens) |
+| `RAILWAY_API_TOKEN` | Railway API token (optional) | [Railway](https://railway.com/account/tokens). Needs access to your project. Used for: listing services/deployments, reading logs, redeploying, reading env vars, running read-only SQL queries. |
 
 ### Cloudflare Resources (created by setup script)
 
