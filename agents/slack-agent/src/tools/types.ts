@@ -71,6 +71,8 @@ export interface ToolContext {
   slackContext?: SlackContext;
   /** Raw Slack thread messages available for tool handlers that need conversation context. */
   thread?: { user?: string; text?: string; ts: string; thread_ts?: string }[];
+  /** Send a status notification to the user's Slack thread (fire-and-forget). */
+  sendNotification?: (message: string) => Promise<void>;
 }
 
 export interface ToolExecutionParams {

@@ -508,12 +508,24 @@ export class DevAgent extends DurableObject<Env> {
 		const now = new Date().toISOString();
 		const repoConfig = await this.lookupRepoConfig(request.repo);
 
+		let branch = request.branch ?? repoConfig?.defaultBranch ?? DEFAULT_GIT_BRANCH;
+		const defaultBranch = repoConfig?.defaultBranch ?? DEFAULT_GIT_BRANCH;
+
+		// Verify the target branch exists on the remote; fall back to default if not
+		if (branch !== defaultBranch) {
+			const branchExists = await this.remoteBranchExists(request.repo, branch);
+			if (!branchExists) {
+				console.warn(`[${id}] Branch "${branch}" not found on remote, falling back to "${defaultBranch}"`);
+				branch = defaultBranch;
+			}
+		}
+
 		const task: StoredTask = {
 			id,
 			status: "pending",
 			repo: request.repo,
 			task: request.task,
-			branch: request.branch ?? repoConfig?.defaultBranch ?? DEFAULT_GIT_BRANCH,
+			branch,
 			repoConfig,
 			planId: request.planId,
 			mode: request.mode,
@@ -529,7 +541,12 @@ export class DevAgent extends DurableObject<Env> {
 				task.priorTaskId = request.continueFromTaskId;
 				// Use the prior task's feature branch as the base so we start from its work
 				if (prior.branchName) {
-					task.branch = prior.branchName;
+					const priorBranchExists = await this.remoteBranchExists(request.repo, prior.branchName);
+					if (priorBranchExists) {
+						task.branch = prior.branchName;
+					} else {
+						console.warn(`[${id}] Prior branch "${prior.branchName}" not found on remote, staying on "${task.branch}"`);
+					}
 				}
 				const continuation = {
 					priorTaskId: prior.id,
@@ -910,7 +927,43 @@ export class DevAgent extends DurableObject<Env> {
 			}
 		}
 
-		// 4) Ensure alarm is set if there are active tasks/plans
+		// 4) Reconcile plan step statuses with actual task outcomes
+		for (const planId of planIds) {
+			const plan = await this.getPlan(planId);
+			if (!plan) continue;
+
+			let planChanged = false;
+			for (let i = 0; i < plan.steps.length; i++) {
+				const step = plan.steps[i];
+				if (!step.taskId) continue;
+
+				// Step marked failed but task actually succeeded
+				if (step.status === "failed" || (step.status === "running" && plan.status !== "running")) {
+					const task = await this.getTask(step.taskId);
+					if (!task) continue;
+
+					if (task.status === "completed" && (task.outcome === "pr_created" || task.outcome === "no_changes")) {
+						const oldStatus = step.status;
+						step.status = "completed";
+						step.prUrl = step.prUrl ?? task.prUrl;
+						step.branchName = step.branchName ?? task.branchName;
+						if (task.prUrl && !step.prNumber) {
+							const prMatch = task.prUrl.match(/\/pull\/(\d+)/);
+							if (prMatch) step.prNumber = parseInt(prMatch[1], 10);
+						}
+						planChanged = true;
+						console.warn(`[watchdog] Plan ${planId} step ${i} was ${oldStatus} but task ${step.taskId} is completed (${task.outcome}), fixed`);
+						cleaned.push(`plan-reconcile:${planId}:step:${i}`);
+					}
+				}
+			}
+
+			if (planChanged) {
+				await this.savePlan(plan);
+			}
+		}
+
+		// 5) Ensure alarm is set if there are active tasks/plans
 		if (hasActive) {
 			const currentAlarm = await this.ctx.storage.getAlarm();
 			if (!currentAlarm) {
@@ -1339,10 +1392,12 @@ export class DevAgent extends DurableObject<Env> {
 			);
 			if (!step || step.status === "merged") continue;
 
-			if (m.prNumber && !step.prNumber) {
-				step.prNumber = m.prNumber;
-				step.prUrl = `https://github.com/${repo}/pull/${m.prNumber}`;
-				changed = true;
+			if (m.prNumber) {
+				if (step.prNumber !== m.prNumber) {
+					step.prNumber = m.prNumber;
+					step.prUrl = `https://github.com/${repo}/pull/${m.prNumber}`;
+					changed = true;
+				}
 			}
 
 			if (step.prNumber) {
@@ -1602,6 +1657,27 @@ export class DevAgent extends DurableObject<Env> {
 		}
 
 		return null;
+	}
+
+	private async remoteBranchExists(repoUrl: string, branch: string): Promise<boolean> {
+		try {
+			const match = repoUrl.match(/github\.com\/([^/]+\/[^/.]+)/);
+			if (!match) return true; // Can't check non-GitHub repos, assume exists
+			const repo = match[1];
+			const res = await fetch(
+				`https://api.github.com/repos/${repo}/branches/${encodeURIComponent(branch)}`,
+				{
+					headers: {
+						Accept: "application/vnd.github+json",
+						Authorization: `Bearer ${this.env.GITHUB_TOKEN}`,
+						"User-Agent": "cf-dev-agent",
+					},
+				},
+			);
+			return res.ok;
+		} catch {
+			return true; // On network error, assume exists and let clone fail naturally
+		}
 	}
 
 	async setRepoConfig(config: RepoConfig): Promise<void> {
