@@ -831,7 +831,37 @@ export class DevAgent extends DurableObject<Env> {
 				continue;
 			}
 
-			// 2) Failed tasks that belong to a plan — check if the plan got stuck
+			// 2) Completed non-research tasks with no changes — treat as failed and retrigger
+			if (
+				task.status === "completed" &&
+				task.outcome === "no_changes" &&
+				task.mode !== "research" &&
+				task.repo !== "test"
+			) {
+				console.warn(`[watchdog] Task ${id} completed with no_changes, marking failed and retriggering`);
+				task.status = "failed";
+				task.outcome = "error";
+				task.error = "Watchdog: task produced no code changes — retriggered";
+				await this.saveTask(task);
+
+				if (task.planId) {
+					// Let plan retry logic handle it (onTaskCompleted will schedule a retry)
+					await this.onTaskCompleted(task);
+					retriggered.push(`plan-no-changes:${id}`);
+				} else {
+					// Standalone task: create a fresh continuation
+					const newTask = await this.createTask({
+						repo: task.repo,
+						task: task.task,
+						branch: task.branch,
+					});
+					retriggered.push(`retrigger-no-changes:${id}->${newTask.id}`);
+					hasActive = true;
+				}
+				continue;
+			}
+
+			// 3) Failed tasks that belong to a plan — check if the plan got stuck
 			if (task.planId && (task.status === "failed" || task.status === "completed")) {
 				const plan = await this.getPlan(task.planId);
 				if (plan && plan.status === "running") {
@@ -1230,20 +1260,33 @@ export class DevAgent extends DurableObject<Env> {
 				console.log(`[plan:${plan.id}] All ${plan.steps.length} steps completed`);
 			}
 		} else if (task.status === "completed" && task.outcome === "no_changes") {
-			step.status = "completed";
-			step.branchName = task.branchName;
-
-			const nextIndex = stepIndex + 1;
-			if (nextIndex < plan.steps.length) {
-				plan.currentStepIndex = nextIndex;
+			// No code changes for a plan step is unusual — retry once, then advance
+			const retries = step.retryCount ?? 0;
+			if (retries < 1) {
+				step.retryCount = retries + 1;
+				step.status = "pending";
+				step.taskId = undefined;
 				await this.savePlan(plan);
-				await this.startPlanStep(plan, nextIndex);
+				const backoff = 15_000;
+				console.warn(`[plan:${plan.id}] Step ${stepIndex} completed with no changes, scheduling retry in ${backoff}ms (attempt ${step.retryCount})`);
+				await this.ctx.storage.setAlarm(Date.now() + backoff);
 			} else {
-				plan.status = "completed";
-				plan.currentStepIndex = plan.steps.length;
-				await this.savePlan(plan);
-				await this.archivePlan(plan);
-				console.log(`[plan:${plan.id}] All steps completed (last had no changes)`);
+				// Already retried — accept and advance
+				step.status = "completed";
+				step.branchName = task.branchName;
+
+				const nextIndex = stepIndex + 1;
+				if (nextIndex < plan.steps.length) {
+					plan.currentStepIndex = nextIndex;
+					await this.savePlan(plan);
+					await this.startPlanStep(plan, nextIndex);
+				} else {
+					plan.status = "completed";
+					plan.currentStepIndex = plan.steps.length;
+					await this.savePlan(plan);
+					await this.archivePlan(plan);
+					console.log(`[plan:${plan.id}] All steps completed (last had no changes after retry)`);
+				}
 			}
 		} else {
 			const isTransient = task.step?.startsWith("failed:sandbox");
