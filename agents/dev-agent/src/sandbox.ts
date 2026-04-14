@@ -226,6 +226,7 @@ export async function startTestInSandbox(
 	const claudeCmd = [
 		`claude`,
 		`-p "${task.replace(/"/g, '\\"')}"`,
+		`--model claude-sonnet-4-6`,
 		`--max-turns 2`,
 		`--verbose`,
 	].join(" ");
@@ -304,6 +305,7 @@ export async function startResearchInSandbox(
 		`claude`,
 		`--append-system-prompt "$(cat ${promptPath})"`,
 		`-p "Analyze this repository and produce a comprehensive codebase audit."`,
+		`--model claude-sonnet-4-6`,
 		`--permission-mode bypassPermissions`,
 		`--max-turns 15`,
 		`--output-format stream-json`,
@@ -472,6 +474,7 @@ export async function startClaudeInSandbox(
 		`claude`,
 		`--append-system-prompt "$(cat ${promptPath})"`,
 		`-p "$_AGENT_TASK"`,
+		`--model claude-sonnet-4-6`,
 		`--permission-mode bypassPermissions`,
 		`--max-turns 30`,
 		`--output-format stream-json`,

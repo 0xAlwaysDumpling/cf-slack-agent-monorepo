@@ -31,6 +31,8 @@ export const ALARM_BUFFER_MS = 30 * 1000; // 30s buffer after timeout before ala
 export const CHECKPOINT_INTERVAL_MS = 60 * 1000; // checkpoint git every 60s
 export const SANDBOX_INIT_MAX_RETRIES = 2;
 export const SANDBOX_INIT_RETRY_DELAY_MS = 3_000; // 3s between retries
+export const MAX_STEP_RETRIES_TRANSIENT = 3;
+export const MAX_STEP_RETRIES_NON_TRANSIENT = 3;
 
 // ---------------------------------------------------------------------------
 // PR / Commit formatting

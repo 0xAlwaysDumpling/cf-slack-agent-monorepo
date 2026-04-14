@@ -20,6 +20,8 @@ import {
 	STORAGE_KEY_PLAN_PREFIX,
 	MAX_LISTED_PLANS,
 	PLAN_ID_LENGTH,
+	MAX_STEP_RETRIES_TRANSIENT,
+	MAX_STEP_RETRIES_NON_TRANSIENT,
 } from "./config/constants";
 
 const POLL_INTERVAL_MS = 5_000;
@@ -81,11 +83,10 @@ export class DevAgent extends DurableObject<Env> {
 	private async appendLogs(taskId: string, chunk: string): Promise<void> {
 		const key = `logs:${taskId}`;
 		const existing = await this.ctx.storage.get<string>(key) ?? "";
-		let updated = existing + chunk;
-		// Cap stored logs at 2MB to prevent DO memory exhaustion.
-		// Older content is trimmed from the front; the tail is most useful for
-		// usage parsing, error detection, and summarization.
-		const MAX_LOG_BYTES = 2 * 1024 * 1024;
+		// Strip thinking signature blobs (huge base64, useless for analysis)
+		const stripped = chunk.replace(/"signature":"[A-Za-z0-9+/=]{100,}"/g, '"signature":"[stripped]"');
+		let updated = existing + stripped;
+		const MAX_LOG_BYTES = 1024 * 1024; // 1MB cap
 		if (updated.length > MAX_LOG_BYTES) {
 			updated = updated.slice(-MAX_LOG_BYTES);
 		}
@@ -859,33 +860,20 @@ export class DevAgent extends DurableObject<Env> {
 				continue;
 			}
 
-			// 2) Completed non-research tasks with no changes — treat as failed and retrigger
+			// 2) Completed non-research plan tasks with no changes — let plan retry logic handle it
 			if (
 				task.status === "completed" &&
 				task.outcome === "no_changes" &&
 				task.mode !== "research" &&
-				task.repo !== "test"
+				task.planId
 			) {
-				console.warn(`[watchdog] Task ${id} completed with no_changes, marking failed and retriggering`);
+				console.warn(`[watchdog] Plan task ${id} completed with no_changes, marking failed for plan retry`);
 				task.status = "failed";
 				task.outcome = "error";
-				task.error = "Watchdog: task produced no code changes — retriggered";
+				task.error = "Watchdog: task produced no code changes";
 				await this.saveTask(task);
-
-				if (task.planId) {
-					// Let plan retry logic handle it (onTaskCompleted will schedule a retry)
-					await this.onTaskCompleted(task);
-					retriggered.push(`plan-no-changes:${id}`);
-				} else {
-					// Standalone task: create a fresh continuation
-					const newTask = await this.createTask({
-						repo: task.repo,
-						task: task.task,
-						branch: task.branch,
-					});
-					retriggered.push(`retrigger-no-changes:${id}->${newTask.id}`);
-					hasActive = true;
-				}
+				await this.onTaskCompleted(task);
+				retriggered.push(`plan-no-changes:${id}`);
 				continue;
 			}
 
@@ -918,23 +906,41 @@ export class DevAgent extends DurableObject<Env> {
 
 			if (currentStep.taskId) {
 				const task = await this.getTask(currentStep.taskId);
-				// Task doesn't exist in DO storage anymore (evicted?) — mark step failed and retry
 				if (!task) {
-					console.warn(`[watchdog] Plan ${planId} step ${plan.currentStepIndex} has missing task ${currentStep.taskId}, retriggering`);
-					currentStep.status = "pending";
-					currentStep.taskId = undefined;
-					currentStep.retryCount = (currentStep.retryCount ?? 0) + 1;
+					const retries = currentStep.retryCount ?? 0;
+					if (retries >= MAX_STEP_RETRIES_NON_TRANSIENT) {
+						console.error(`[watchdog] Plan ${planId} step ${plan.currentStepIndex} exhausted retries (${retries}), failing plan`);
+						currentStep.status = "failed";
+						plan.status = "failed";
+						plan.error = `Step ${(plan.currentStepIndex ?? 0) + 1} failed: exceeded max retries`;
+						await this.savePlan(plan);
+					} else {
+						console.warn(`[watchdog] Plan ${planId} step ${plan.currentStepIndex} has missing task ${currentStep.taskId}, retriggering (${retries + 1}/${MAX_STEP_RETRIES_NON_TRANSIENT})`);
+						currentStep.status = "pending";
+						currentStep.taskId = undefined;
+						currentStep.retryCount = retries + 1;
+						await this.savePlan(plan);
+						await this.startPlanStep(plan, plan.currentStepIndex ?? 0);
+						retriggered.push(`plan:${planId}:step:${plan.currentStepIndex}`);
+						hasActive = true;
+					}
+				}
+			} else {
+				const retries = currentStep.retryCount ?? 0;
+				if (retries >= MAX_STEP_RETRIES_NON_TRANSIENT) {
+					console.error(`[watchdog] Plan ${planId} step ${plan.currentStepIndex} running with no task and exhausted retries (${retries}), failing plan`);
+					currentStep.status = "failed";
+					plan.status = "failed";
+					plan.error = `Step ${(plan.currentStepIndex ?? 0) + 1} failed: exceeded max retries`;
+					await this.savePlan(plan);
+				} else {
+					console.warn(`[watchdog] Plan ${planId} step ${plan.currentStepIndex} running with no task, starting (${retries + 1}/${MAX_STEP_RETRIES_NON_TRANSIENT})`);
+					currentStep.retryCount = retries + 1;
 					await this.savePlan(plan);
 					await this.startPlanStep(plan, plan.currentStepIndex ?? 0);
 					retriggered.push(`plan:${planId}:step:${plan.currentStepIndex}`);
 					hasActive = true;
 				}
-			} else {
-				// Step is "running" but has no taskId — start it
-				console.warn(`[watchdog] Plan ${planId} step ${plan.currentStepIndex} running with no task, starting`);
-				await this.startPlanStep(plan, plan.currentStepIndex ?? 0);
-				retriggered.push(`plan:${planId}:step:${plan.currentStepIndex}`);
-				hasActive = true;
 			}
 		}
 
@@ -1351,22 +1357,28 @@ export class DevAgent extends DurableObject<Env> {
 			const isTransient = task.step?.startsWith("failed:sandbox");
 			const retries = step.retryCount ?? 0;
 
-			if (isTransient && retries < 5) {
+			if (isTransient && retries < MAX_STEP_RETRIES_TRANSIENT) {
 				step.retryCount = retries + 1;
 				step.status = "pending";
 				step.taskId = undefined;
 				await this.savePlan(plan);
 				const backoff = Math.min(10_000 * step.retryCount, 60_000);
-				console.warn(`[plan:${plan.id}] Step ${stepIndex} transient failure (attempt ${step.retryCount}/5), scheduling retry in ${backoff}ms: ${task.error}`);
+				console.warn(`[plan:${plan.id}] Step ${stepIndex} transient failure (attempt ${step.retryCount}/${MAX_STEP_RETRIES_TRANSIENT}), scheduling retry in ${backoff}ms: ${task.error}`);
 				await this.ctx.storage.setAlarm(Date.now() + backoff);
-			} else if (!isTransient && retries < 6) {
-				// Non-transient failure: allow 1 continuation retry that resumes from the prior branch
+			} else if (!isTransient && retries < MAX_STEP_RETRIES_NON_TRANSIENT) {
 				step.retryCount = retries + 1;
 				step.status = "pending";
-				step.continueFromTaskId = task.id;
+				// First retry: continuation (resume from prior branch). Subsequent: fresh run.
+				const isFresh = retries >= 1;
+				if (isFresh) {
+					step.continueFromTaskId = undefined;
+				} else {
+					step.continueFromTaskId = task.id;
+				}
 				await this.savePlan(plan);
 				const backoff = 15_000;
-				console.warn(`[plan:${plan.id}] Step ${stepIndex} non-transient failure, scheduling continuation retry in ${backoff}ms (prior: ${task.id}): ${task.error}`);
+				const mode = isFresh ? "fresh" : "continuation";
+				console.warn(`[plan:${plan.id}] Step ${stepIndex} non-transient failure, scheduling ${mode} retry in ${backoff}ms (attempt ${step.retryCount}/${MAX_STEP_RETRIES_NON_TRANSIENT}): ${task.error}`);
 				await this.ctx.storage.setAlarm(Date.now() + backoff);
 			} else {
 				step.status = "failed";
