@@ -1470,7 +1470,7 @@ export class DevAgent extends DurableObject<Env> {
 			}
 
 			if (!step.prNumber && repoPRs) {
-				const match = this.matchPRToStep(step, repoPRs);
+				const match = this.matchPRToStep(step, repoPRs, plan);
 				if (match) {
 					step.prNumber = match.number;
 					step.prUrl = match.html_url;
@@ -1529,18 +1529,31 @@ export class DevAgent extends DurableObject<Env> {
 		return this.planToResult(plan);
 	}
 
-	private matchPRToStep(step: PlanStep, prs: GitHubPR[]): GitHubPR | null {
+	private matchPRToStep(step: PlanStep, prs: GitHubPR[], plan: Plan): GitHubPR | null {
+		// Only match PRs whose head branch corresponds to a task in THIS plan
+		const planTaskIds = new Set(
+			plan.steps.map((s) => s.taskId).filter(Boolean) as string[]
+		);
+
+		const candidates = prs.filter((pr) => {
+			// PR branch must be a dev-agent branch for a task in this plan
+			const branchTaskId = pr.head.ref.replace(/^dev-agent\//, "");
+			return planTaskIds.has(branchTaskId);
+		});
+
+		if (candidates.length === 0) return null;
+
 		const descWords = step.description.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
 		if (descWords.length === 0) return null;
 
 		let bestMatch: GitHubPR | null = null;
 		let bestScore = 0;
 
-		for (const pr of prs) {
+		for (const pr of candidates) {
 			const titleLower = pr.title.toLowerCase();
 			const matchCount = descWords.filter((w) => titleLower.includes(w)).length;
 			const score = matchCount / descWords.length;
-			if (score > bestScore && score >= 0.2) {
+			if (score > bestScore && score >= 0.3) {
 				bestScore = score;
 				bestMatch = pr;
 			}
@@ -1614,13 +1627,6 @@ export class DevAgent extends DurableObject<Env> {
 		const plan = await this.getPlan(planId);
 		if (!plan) return null;
 
-		if (plan.status === "draft") {
-			return {
-				...this.planToResult(plan),
-				error: `Plan is already in draft state`,
-			};
-		}
-
 		// Cancel any running tasks before resetting
 		for (const step of plan.steps) {
 			if (step.taskId && step.status === "running") {
@@ -1629,18 +1635,17 @@ export class DevAgent extends DurableObject<Env> {
 		}
 
 		for (const step of plan.steps) {
-			if (step.status === "failed" || step.status === "running" || step.status === "pending") {
-				step.status = "pending";
-				step.taskId = undefined;
-				step.prUrl = undefined;
-				step.prNumber = undefined;
-				step.branchName = undefined;
-				step.retryCount = undefined;
-				step.continueFromTaskId = undefined;
-			}
+			step.status = "pending";
+			step.taskId = undefined;
+			step.prUrl = undefined;
+			step.prNumber = undefined;
+			step.branchName = undefined;
+			step.retryCount = undefined;
+			step.continueFromTaskId = undefined;
 		}
 
 		plan.status = "draft";
+		plan.currentStepIndex = 0;
 		plan.error = undefined;
 		await this.savePlan(plan);
 		console.log(`[plan:${planId}] Reset to draft`);
