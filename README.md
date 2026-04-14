@@ -139,10 +139,26 @@ Set `CLOUDFLARE_API_TOKEN` as a GitHub Actions secret. Create a [custom API toke
 
 ### Cloudflare AI Gateway
 
-| Variable | Required permissions | Where to find it |
-|----------|---------------------|------------------|
-| `CF_AIG_TOKEN` | AI Gateway API key -- used to route model inference through your gateway. Create one in your gateway's settings under "API Key". | [Dashboard](https://dash.cloudflare.com) > AI > AI Gateway > your gateway > Settings |
-| `CF_GATEWAY` | N/A (just the gateway name) | Same page |
+The slack-agent routes **all LLM calls** (Anthropic, OpenAI, Google, etc.) through a [Cloudflare AI Gateway](https://developers.cloudflare.com/ai-gateway/). This gives you a unified dashboard for logging, caching, rate limiting, and cost tracking across providers -- you provide your own API keys (e.g. Anthropic) and the gateway proxies the requests.
+
+**Setup steps:**
+
+1. Go to [Cloudflare Dashboard](https://dash.cloudflare.com) > **AI** > **AI Gateway**
+2. Click **Create Gateway**
+3. Give it a name (e.g. `my-agent-gateway`) -- this becomes your `CF_GATEWAY` value
+4. Once created, go to the gateway's **Settings** tab
+5. Under **API Key**, create a new key -- this becomes your `CF_AIG_TOKEN` value
+6. Under **Providers**, add the providers you want to use:
+   - **Anthropic** (required) -- paste your `ANTHROPIC_API_KEY` here. This is the key from [Anthropic Console](https://console.anthropic.com/settings/keys).
+   - **OpenAI**, **Google** (optional) -- add these if you want multi-model support
+
+| Variable | Description |
+|----------|-------------|
+| `CF_AIG_TOKEN` | AI Gateway API key (gateway Settings > API Key) |
+| `CF_GATEWAY` | Gateway name (the name you chose in step 3) |
+| `ANTHROPIC_API_KEY` | Your Anthropic API key -- also used directly by the dev-agent for Claude Code |
+
+> **Note:** The `ANTHROPIC_API_KEY` is used in two places: (1) added as a provider in AI Gateway so the slack-agent can call Claude, and (2) passed directly to the dev-agent which uses it for Claude Code in the sandbox. You only need one key.
 
 ### Slack
 
