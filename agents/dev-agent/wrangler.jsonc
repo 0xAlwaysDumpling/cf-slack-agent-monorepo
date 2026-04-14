@@ -1,0 +1,70 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "cf-dev-agent",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-09-27",
+	"compatibility_flags": ["nodejs_compat"],
+	"vars": {
+		"COMMAND_TIMEOUT_MS": "600000",
+		"SANDBOX_LOG_LEVEL": "debug",
+		"SANDBOX_LOG_FORMAT": "pretty"
+	},
+	"observability": {
+		"enabled": true,
+		"head_sampling_rate": 1,
+		"logs": {
+			"invocation_logs": true
+		}
+	},
+	"containers": [
+		{
+			"class_name": "Sandbox",
+			"image": "./Dockerfile",
+			"instance_type": "standard-1"
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"class_name": "Sandbox",
+				"name": "Sandbox"
+			},
+			{
+				"class_name": "DevAgent",
+				"name": "DevAgent"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["Sandbox", "DevAgent"]
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "SESSIONS_BUCKET",
+			"bucket_name": "dev-agent-sessions"
+		}
+	],
+	"services": [
+		{
+			"binding": "SLACK_AGENT",
+			"service": "cf-slack-agent"
+		}
+	],
+	"env": {
+		"production": {
+			"observability": {
+				"enabled": true,
+				"head_sampling_rate": 1
+			}
+		},
+		"staging": {
+			"observability": {
+				"enabled": true,
+				"head_sampling_rate": 0.1
+			}
+		}
+	}
+}

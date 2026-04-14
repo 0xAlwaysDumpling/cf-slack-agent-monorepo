@@ -1,0 +1,17 @@
+{
+	"name": "cf-agent-monorepo",
+	"version": "0.0.1",
+	"private": true,
+	"packageManager": "pnpm@10.28.1",
+	"scripts": {
+		"setup": "bash scripts/setup.sh",
+		"dev:dev-agent": "pnpm --filter dev-agent dev",
+		"dev:slack-agent": "pnpm --filter slack-agent dev",
+		"dev:agent-view": "pnpm --filter agent-view dev",
+		"deploy": "pnpm --filter dev-agent deploy && pnpm --filter slack-agent deploy && pnpm --filter agent-view deploy",
+		"deploy:dev-agent": "pnpm --filter dev-agent deploy",
+		"deploy:slack-agent": "pnpm --filter slack-agent deploy",
+		"deploy:agent-view": "pnpm --filter agent-view deploy",
+		"typecheck": "pnpm -r run typecheck"
+	}
+}

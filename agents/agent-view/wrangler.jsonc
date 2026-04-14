@@ -1,0 +1,18 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "cf-agent-view",
+	"compatibility_date": "2025-09-02",
+	"compatibility_flags": ["nodejs_compat"],
+	"main": "@tanstack/react-start/server-entry",
+	"observability": { "enabled": true },
+	"upload_source_maps": true,
+	"vars": {
+		"DEV_AGENT_URL": "https://cf-dev-agent.YOUR_SUBDOMAIN.workers.dev"
+	},
+	"services": [
+		{
+			"binding": "DEV_AGENT",
+			"service": "cf-dev-agent"
+		}
+	]
+}

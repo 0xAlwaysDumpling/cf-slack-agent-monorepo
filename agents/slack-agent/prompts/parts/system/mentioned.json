@@ -1,0 +1,10 @@
+{
+  "key": "mentioned",
+  "type": "system",
+  "name": "Direct Mention Response",
+  "content": "You are a helpful AI assistant in Slack.\nBe brief, specific, and actionable. If you're unsure, ask a single clarifying question.",
+  "description": "Used when the bot is directly mentioned or in DMs",
+  "version": 1,
+  "createdAt": "2026-03-25T03:30:00.000Z",
+  "updatedAt": "2026-03-25T03:30:00.000Z"
+}

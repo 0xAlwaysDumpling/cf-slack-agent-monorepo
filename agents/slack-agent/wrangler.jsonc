@@ -1,0 +1,65 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "cf-slack-agent",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-09-27",
+	"compatibility_flags": ["nodejs_compat"],
+	"observability": {
+		"enabled": true,
+		"head_sampling_rate": 1,
+		"logs": {
+			"invocation_logs": true
+		}
+	},
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "MyAgent",
+				"class_name": "MyAgent"
+			}
+		]
+	},
+	"r2_buckets": [
+		{
+			"bucket_name": "slack-agent-prompts",
+			"binding": "PROMPTS_BUCKET"
+		},
+		{
+			"bucket_name": "slack-agent-messages",
+			"binding": "MESSAGES_BUCKET"
+		}
+	],
+	"services": [
+		{
+			"binding": "DEV_AGENT",
+			"service": "cf-dev-agent"
+		}
+	],
+	"d1_databases": [
+		{
+			"binding": "JOBS_DB",
+			"database_name": "leaderboard-db",
+			"database_id": "YOUR_D1_DATABASE_ID"
+		}
+	],
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["MyAgent"]
+		}
+	],
+	"env": {
+		"production": {
+			"observability": {
+				"enabled": true,
+				"head_sampling_rate": 1
+			}
+		},
+		"staging": {
+			"observability": {
+				"enabled": true,
+				"head_sampling_rate": 0.1
+			}
+		}
+	}
+}

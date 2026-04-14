@@ -1,0 +1,24 @@
+{
+	"name": "dev-agent",
+	"version": "0.0.0",
+	"type": "module",
+	"private": true,
+	"scripts": {
+		"deploy": "wrangler deploy",
+		"dev": "wrangler dev",
+		"start": "wrangler dev",
+		"types": "wrangler types",
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run"
+	},
+	"devDependencies": {
+		"@cloudflare/sandbox": "*",
+		"@types/node": "^24.10.1",
+		"typescript": "^5.9.3",
+		"vitest": "^4.1.4",
+		"wrangler": "^4.76.0"
+	},
+	"dependencies": {
+		"postgres": "^3.4.5"
+	}
+}

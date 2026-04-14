@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "type": "system",
+  "parts": [
+    {
+      "key": "mentioned",
+      "name": "Direct Mention Response",
+      "description": "Used when the bot is directly mentioned or in DMs"
+    },
+    {
+      "key": "thread-reply",
+      "name": "Thread Reply Response",
+      "description": "Used when responding to replies in a thread"
+    }
+  ]
+}
