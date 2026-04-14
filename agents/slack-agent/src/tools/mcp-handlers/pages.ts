@@ -24,7 +24,7 @@ export function createPagesMCPTools(): ToolDefinition[] {
     {
       name: "pages.create-project",
       description:
-        `Create a Cloudflare Pages project linked to a GitHub repo for auto-deploy on push. Supports monorepos — set root_dir to the app subfolder (e.g. "packages/web"). The repo must already exist and the Cloudflare Pages GitHub App must be installed on the org (${GITHUB_ORG}). Use this for existing repos or when github.create-repo didn't auto-create a Pages project.`,
+        "Create a Cloudflare Pages project linked to a GitHub repo for auto-deploy on push. Supports monorepos — set root_dir to the app subfolder (e.g. \"packages/web\"). The repo must already exist and the Cloudflare Pages GitHub App must be installed on the org. Use this for existing repos or when github.create-repo didn't auto-create a Pages project.",
       category: "shared",
       version: 1,
       inputSchema: {
@@ -40,7 +40,7 @@ export function createPagesMCPTools(): ToolDefinition[] {
           },
           owner: {
             type: "string",
-            description: `GitHub org or user that owns the repo. Defaults to ${GITHUB_ORG}.`,
+            description: "GitHub org or user that owns the repo. Defaults to GITHUB_ORG constant if set.",
           },
           production_branch: {
             type: "string",

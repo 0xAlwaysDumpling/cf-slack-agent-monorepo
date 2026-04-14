@@ -17,7 +17,7 @@ export const RAILWAY_GRAPHQL_URL = "https://backboard.railway.com/graphql/v2";
 // Git identity & defaults
 // ---------------------------------------------------------------------------
 export const GIT_USER_NAME = "Dev Agent";
-export const GIT_USER_EMAIL = "dev-agent@nostalgic.dev";
+export const GIT_USER_EMAIL = "dev-agent@example.com";
 export const DEFAULT_GIT_BRANCH = "main";
 export const DEFAULT_BRANCH_PREFIX = "dev-agent/";
 

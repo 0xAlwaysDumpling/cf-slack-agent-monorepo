@@ -160,7 +160,7 @@ export function createGitHubMCPTools(): ToolDefinition[] {
         properties: {
           org: {
             type: "string",
-            description: `GitHub org name (e.g. ${GITHUB_ORG}). If omitted, lists repos for the authenticated user.`,
+            description: "GitHub org name. If omitted, lists repos for the authenticated user.",
           },
           query: {
             type: "string",
@@ -223,7 +223,7 @@ export function createGitHubMCPTools(): ToolDefinition[] {
         properties: {
           repo: {
             type: "string",
-            description: `Full repo name (e.g. ${GITHUB_ORG}/apyfarm) or URL`,
+            description: `Full repo name (e.g. "owner/repo") or URL`,
           },
         },
         required: ["repo"],
@@ -277,7 +277,7 @@ export function createGitHubMCPTools(): ToolDefinition[] {
 
     {
       name: "github.create-repo",
-      description: `Create a new repository in the ${GITHUB_ORG} org. By default scaffolds a pnpm monorepo from cf-app-template (apps/web = Cloudflare Pages, workers/api = Worker, packages/shared = shared types) and auto-creates a Cloudflare Pages project linked to apps/web for deploy-on-push. Set template=false for a plain repo. Confirm name and public/private with the user first.`,
+      description: `Create a new GitHub repository. If GITHUB_ORG is configured and a "cf-app-template" template repo exists in the org, scaffolds a pnpm monorepo (apps/web = Pages, workers/api = Worker, packages/shared) and auto-creates a Cloudflare Pages project for deploy-on-push. Set template=false for a plain repo. Confirm name and public/private with the user first.`,
       category: "shared",
       version: 1,
       inputSchema: {
@@ -289,7 +289,7 @@ export function createGitHubMCPTools(): ToolDefinition[] {
           },
           org: {
             type: "string",
-            description: `GitHub organization login. Defaults to ${GITHUB_ORG} if omitted.`,
+            description: "GitHub organization login. Defaults to GITHUB_ORG constant if set.",
           },
           description: {
             type: "string",
@@ -302,7 +302,7 @@ export function createGitHubMCPTools(): ToolDefinition[] {
           template: {
             type: "boolean",
             description:
-              "If true (default), scaffold a pnpm monorepo from cf-app-template (apps/web, workers/api, packages/shared) and auto-create a Cloudflare Pages project for apps/web. If false, create a plain repo with an initial README only (no Pages project).",
+              "If true (default) and a cf-app-template repo exists in the org, scaffold from it and auto-create a Cloudflare Pages project. If false, create a plain repo with an initial README only.",
           },
         },
         required: ["name"],
@@ -488,7 +488,7 @@ export function createGitHubMCPTools(): ToolDefinition[] {
         properties: {
           repo: {
             type: "string",
-            description: `Full repo name (e.g. ${GITHUB_ORG}/my-app) or GitHub URL.`,
+            description: `Full repo name (e.g. "owner/my-app") or GitHub URL.`,
           },
           pr_number: {
             type: "number",
@@ -627,7 +627,7 @@ export function createGitHubMCPTools(): ToolDefinition[] {
         properties: {
           repo: {
             type: "string",
-            description: `Full repo name (e.g. ${GITHUB_ORG}/my-app) or GitHub URL.`,
+            description: `Full repo name (e.g. "owner/my-app") or GitHub URL.`,
           },
           pr_number: {
             type: "number",
@@ -706,7 +706,7 @@ export function createGitHubMCPTools(): ToolDefinition[] {
         properties: {
           repo: {
             type: "string",
-            description: `Full repo name (e.g. ${GITHUB_ORG}/my-app) or GitHub URL.`,
+            description: `Full repo name (e.g. "owner/my-app") or GitHub URL.`,
           },
           pr_number: {
             type: "number",
@@ -821,7 +821,7 @@ export function createGitHubMCPTools(): ToolDefinition[] {
         properties: {
           repo: {
             type: "string",
-            description: `Full repo name (e.g. ${GITHUB_ORG}/my-app) or GitHub URL.`,
+            description: `Full repo name (e.g. "owner/my-app") or GitHub URL.`,
           },
           pr_number: {
             type: "number",
@@ -1126,7 +1126,7 @@ export function createGitHubMCPTools(): ToolDefinition[] {
         properties: {
           repo: {
             type: "string",
-            description: `Full repo name (e.g. ${GITHUB_ORG}/my-app) or GitHub URL.`,
+            description: `Full repo name (e.g. "owner/my-app") or GitHub URL.`,
           },
           ref: {
             type: "string",
@@ -1205,7 +1205,7 @@ export function createGitHubMCPTools(): ToolDefinition[] {
         properties: {
           repo: {
             type: "string",
-            description: `Full repo name (e.g. ${GITHUB_ORG}/my-app) or GitHub URL.`,
+            description: `Full repo name (e.g. "owner/my-app") or GitHub URL.`,
           },
           path: {
             type: "string",
@@ -1319,7 +1319,7 @@ export function createGitHubMCPTools(): ToolDefinition[] {
         properties: {
           repo: {
             type: "string",
-            description: `Full repo name (e.g. ${GITHUB_ORG}/my-app) or GitHub URL.`,
+            description: `Full repo name (e.g. "owner/my-app") or GitHub URL.`,
           },
           query: {
             type: "string",
