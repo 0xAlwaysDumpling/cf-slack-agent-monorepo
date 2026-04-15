@@ -261,3 +261,29 @@ If you prefer not to use the setup script:
 ## License
 
 MIT
+
+## Model Selection
+
+The dev-agent supports multiple LLM providers:
+
+### Claude (Default)
+- Uses `claude-sonnet-4-6` for coding tasks
+- Uses `claude-haiku-4-5-20251001` for post-processing (PR summaries)
+- Set via: `ANTHROPIC_API_KEY` (required)
+
+### Fireworks GLM 5.1 (Optional)
+- Alternative model for coding tasks
+- Routed through Fireworks AI API
+- Set via: `FIREWORKS_API_KEY` (optional, push via wrangler secret)
+
+**To use Fireworks:**
+1. Get your Fireworks API key from [Fireworks Console](https://console.fireworks.ai)
+2. Push the secret: `npx wrangler secret put FIREWORKS_API_KEY --name cf-dev-agent`
+3. In the agent-view dashboard:
+   - Click "Retry" on a failed task → select "Fireworks GLM 5.1" in the modal
+   - Click "Run" on a task → select "Fireworks GLM 5.1" in the modal
+   - Click "Run Plan" → select "Fireworks GLM 5.1" in the modal
+4. The selected model will be used for that task/plan execution
+5. Post-processing still uses Anthropic for consistency
+
+Default is always Claude for backward compatibility.
