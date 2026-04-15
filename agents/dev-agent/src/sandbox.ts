@@ -42,7 +42,6 @@ export interface SandboxTaskInput {
 	continueFrom?: { priorTaskId: string };
 	auditContext?: string;
 	modelProvider?: "anthropic" | "fireworks";
-	hasScaffold?: boolean;
 }
 
 export interface TaskUsage {
@@ -432,19 +431,6 @@ export async function startClaudeInSandbox(
 		log(taskId, "audit-context", `injected ${auditContext.length} chars of audit context`);
 	}
 
-	if (input.hasScaffold) {
-		systemPrompt += [
-			"",
-			"",
-			"## Sandbox Environment Note",
-			"This sandbox has NO outbound internet access. Dependencies were pre-installed",
-			"by a separate scaffolding step before you started. Because of this:",
-			"- Do NOT run `npm install`, `pnpm install`, `yarn install`, or any package manager install commands — they will hang forever.",
-			"- Do NOT run `npx tsc`, `npm run build`, or other commands that require installed node_modules — binaries are not available in PATH.",
-			"- Focus on editing source files only. The CI/CD pipeline will validate builds after your PR is created.",
-			"- You CAN use `git`, `grep`, `find`, `cat`, and other standard shell tools.",
-		].join("\n");
-	}
 
 	const commitMsg = `${COMMIT_PREFIX}${task.slice(0, MAX_COMMIT_TASK_CHARS)}`;
 	const prTitle = `${PR_TITLE_PREFIX} ${task.slice(0, MAX_PR_TITLE_TASK_CHARS)}`;
@@ -757,26 +743,5 @@ export async function destroySandbox(env: Env, taskId: string): Promise<void> {
 
 // --- Scaffold worker delegation ---
 
-export interface ScaffoldRequest {
-	repo: string;
-	branch: string;
-	commands: string[];
-	commitMessage?: string;
-}
+// [Removed - scaffold now integrated into dev-agent sandbox with enableInternet]
 
-export interface ScaffoldResult {
-	ok: boolean;
-	committed?: boolean;
-	message?: string;
-	error?: string;
-	logs?: string[];
-}
-
-export async function runScaffold(env: Env, req: ScaffoldRequest): Promise<ScaffoldResult> {
-	const res = await env.SCAFFOLD_WORKER.fetch("https://scaffold/run", {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify(req),
-	});
-	return res.json() as Promise<ScaffoldResult>;
-}

@@ -20,6 +20,5 @@ interface Env {
 	Sandbox: DurableObjectNamespace<import("@cloudflare/sandbox").Sandbox>;
 	DevAgent: DurableObjectNamespace<import("./agent").DevAgent>;
 	SLACK_AGENT: Fetcher;
-	SCAFFOLD_WORKER: Fetcher;
 	SESSIONS_BUCKET: R2Bucket;
 }

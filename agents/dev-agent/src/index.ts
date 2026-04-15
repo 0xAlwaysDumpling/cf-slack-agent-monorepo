@@ -17,7 +17,12 @@ const proxyHandler = createProxyHandler({
 });
 
 export { DevAgent };
-export { Sandbox } from "@cloudflare/sandbox";
+
+import { Sandbox as BaseSandbox } from "@cloudflare/sandbox";
+
+export class Sandbox extends BaseSandbox {
+	override enableInternet = true;
+}
 
 function getAgent(env: Env, agentId = DEFAULT_DO_NAME) {
 	const id = env.DevAgent.idFromName(agentId);

@@ -8,7 +8,6 @@ export interface TaskRequest {
 	continueFromTaskId?: string;
 	mode?: "default" | "research";
 	modelProvider?: "anthropic" | "fireworks";
-	scaffoldCommands?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -29,7 +28,6 @@ export interface PlanStep {
 	status: PlanStepStatus;
 	retryCount?: number;
 	continueFromTaskId?: string;
-	scaffoldCommands?: string[];
 }
 
 export interface Plan {
@@ -62,7 +60,6 @@ export interface PlanResult {
 
 export interface PlanStepInput {
 	description: string;
-	scaffoldCommands?: string[];
 }
 
 export interface PlanRequest {
@@ -74,7 +71,7 @@ export interface PlanRequest {
 }
 
 export interface PlanUpdateRequest {
-	steps?: Array<{ id?: string; description: string; scaffoldCommands?: string[] }>;
+	steps?: Array<{ id?: string; description: string }>;
 	name?: string;
 }
 
