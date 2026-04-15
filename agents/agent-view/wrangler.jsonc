@@ -9,6 +9,7 @@
 	"vars": {
 		"DEV_AGENT_URL": "https://cf-dev-agent.YOUR_SUBDOMAIN.workers.dev"
 	},
+	"secrets": ["AUTH_PASSWORD"],
 	"services": [
 		{
 			"binding": "DEV_AGENT",

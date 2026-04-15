@@ -191,7 +191,7 @@ The agent uses this token for: cloning repos, creating branches, pushing commits
 | Variable | Description | Notes |
 |----------|-------------|-------|
 | `PROXY_JWT_SECRET` | JWT secret for sandbox proxy | Auto-generated during setup if empty |
-| `AUTH_PASSWORD` | Password for the agent-view dashboard | Choose any password |
+| `AUTH_PASSWORD` | Password for the agent-view dashboard | Required; declared in `agents/agent-view/wrangler.jsonc` secrets |
 | `RAILWAY_API_TOKEN` | Railway API token (optional) | [Railway](https://railway.com/account/tokens). Needs access to your project. Used for: listing services/deployments, reading logs, redeploying, reading env vars, running read-only SQL queries. |
 
 ### Cloudflare Resources (created by setup script)
