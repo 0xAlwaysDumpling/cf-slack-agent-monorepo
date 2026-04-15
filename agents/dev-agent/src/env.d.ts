@@ -11,6 +11,7 @@
 interface Env {
 	// Secrets (wrangler secret put)
 	ANTHROPIC_API_KEY: string;
+	FIREWORKS_API_KEY: string;
 	GITHUB_TOKEN: string;
 	PROXY_JWT_SECRET: string;
 	RAILWAY_API_TOKEN?: string;
@@ -19,5 +20,6 @@ interface Env {
 	Sandbox: DurableObjectNamespace<import("@cloudflare/sandbox").Sandbox>;
 	DevAgent: DurableObjectNamespace<import("./agent").DevAgent>;
 	SLACK_AGENT: Fetcher;
+	SCAFFOLD_WORKER: Fetcher;
 	SESSIONS_BUCKET: R2Bucket;
 }

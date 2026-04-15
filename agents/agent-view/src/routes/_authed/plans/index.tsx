@@ -1,8 +1,10 @@
 import { createFileRoute, Link, useRouter } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { fetchPlans, deletePlan } from '@/lib/api'
 import { StatusBadge } from '@/components/StatusBadge'
 import { repoName, timeAgo } from '@/lib/utils'
+
+const POLL_INTERVAL_MS = 5_000
 
 export const Route = createFileRoute('/_authed/plans/')({
   loader: () => fetchPlans(),
@@ -13,6 +15,18 @@ function PlansPage() {
   const plans = Route.useLoaderData()
   const router = useRouter()
   const [loadingAction, setLoadingAction] = useState<Record<string, boolean>>({})
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const hasActive = plans.some((p: { status: string }) => p.status === 'running')
+
+  useEffect(() => {
+    if (hasActive) {
+      intervalRef.current = setInterval(() => router.invalidate(), POLL_INTERVAL_MS)
+    }
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current)
+    }
+  }, [hasActive, router])
 
   const handleDelete = async (planId: string) => {
     setLoadingAction((prev) => ({ ...prev, [planId]: true }))

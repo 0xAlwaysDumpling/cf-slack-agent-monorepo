@@ -31,6 +31,7 @@ export interface TaskResult {
   usage?: TaskUsage
   priorTaskId?: string
   duplicate?: boolean
+  modelProvider?: 'anthropic' | 'fireworks'
 }
 
 export interface PlanStep {
@@ -54,6 +55,7 @@ export interface PlanResult {
   createdAt: string
   updatedAt: string
   error?: string
+  modelProvider?: 'anthropic' | 'fireworks'
 }
 
 export interface ArchivedSession {

@@ -85,12 +85,12 @@ export const fetchTaskSession = createServerFn({ method: 'GET' })
   })
 
 export const retryTask = createServerFn({ method: 'POST' })
-  .inputValidator((d: { repo: string; task: string; branch?: string }) => d)
+  .inputValidator((d: { repo: string; task: string; branch?: string; modelProvider?: 'anthropic' | 'fireworks' }) => d)
   .handler(async ({ data }) => {
     requireAuth()
     const res = await fetchAgent('/tasks', {
       method: 'POST',
-      body: JSON.stringify({ repo: data.repo, task: data.task, branch: data.branch }),
+      body: JSON.stringify({ repo: data.repo, task: data.task, branch: data.branch, modelProvider: data.modelProvider }),
     })
     return (await res.json()) as TaskResult
   })
@@ -109,6 +109,14 @@ export const continueTask = createServerFn({ method: 'POST' })
     requireAuth()
     const res = await fetchAgent(`/tasks/${data.taskId}/continue`, { method: 'POST' })
     return (await res.json()) as TaskResult
+  })
+
+export const deleteTask = createServerFn({ method: 'POST' })
+  .inputValidator((d: { taskId: string }) => d)
+  .handler(async ({ data }) => {
+    requireAuth()
+    const res = await fetchAgent(`/tasks/${data.taskId}`, { method: 'DELETE' })
+    return (await res.json()) as { ok: boolean }
   })
 
 // ── Sessions (R2 archive) ──
@@ -140,10 +148,14 @@ export const fetchPlan = createServerFn({ method: 'GET' })
   })
 
 export const runPlan = createServerFn({ method: 'POST' })
-  .inputValidator((d: { planId: string }) => d)
+  .inputValidator((d: { planId: string; modelProvider?: 'anthropic' | 'fireworks' }) => d)
   .handler(async ({ data }) => {
     requireAuth()
-    const res = await fetchAgent(`/plans/${data.planId}/run`, { method: 'POST' })
+    const body = { modelProvider: data.modelProvider }
+    const res = await fetchAgent(`/plans/${data.planId}/run`, { 
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
     return (await res.json()) as PlanResult
   })
 

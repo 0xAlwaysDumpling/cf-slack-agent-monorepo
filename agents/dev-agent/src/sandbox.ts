@@ -18,7 +18,20 @@ import {
 	TASK_TIMEOUT_MS,
 	SANDBOX_INIT_MAX_RETRIES,
 	SANDBOX_INIT_RETRY_DELAY_MS,
+	FIREWORKS_API_BASE_URL,
 } from "./config/constants";
+
+const GITIGNORE_ENTRIES = [
+	"node_modules/",
+	"dist/",
+	".next/",
+	".nuxt/",
+	".output/",
+	"build/",
+	".cache/",
+	".turbo/",
+	"*.tsbuildinfo",
+];
 
 export interface SandboxTaskInput {
 	taskId: string;
@@ -28,6 +41,8 @@ export interface SandboxTaskInput {
 	repoConfig: RepoConfig | null;
 	continueFrom?: { priorTaskId: string };
 	auditContext?: string;
+	modelProvider?: "anthropic" | "fireworks";
+	hasScaffold?: boolean;
 }
 
 export interface TaskUsage {
@@ -139,7 +154,23 @@ export function detectCliStartupFailure(logs: string): string | null {
 }
 
 const WORKSPACE = SANDBOX_WORKSPACE_DIR;
-const STEP_TIMEOUT_MS = 2 * 60 * 1000;
+const STEP_TIMEOUT_MS = 60 * 1000; // 60s per exec — git ops, PR creation, etc.
+const INIT_STEP_TIMEOUT_MS = 2 * 60 * 1000; // 2 min for heavier init steps (clone, chown)
+
+/**
+ * Ensure common build artifacts are in .gitignore so we never commit node_modules, dist, etc.
+ * Appends missing entries; creates the file if absent. Idempotent.
+ */
+async function ensureGitignore(sandbox: ReturnType<typeof getSandbox>, repoDir: string): Promise<void> {
+	const check = await sandbox.exec(`cat ${repoDir}/.gitignore 2>/dev/null || true`, { timeout: 10_000 });
+	const existing = check.success ? check.stdout : "";
+	const lines = existing.split("\n").map((l: string) => l.trim());
+	const missing = GITIGNORE_ENTRIES.filter((entry) => !lines.includes(entry));
+	if (missing.length > 0) {
+		const heredoc = `cat >> ${repoDir}/.gitignore << 'GITIGNORE_EOF'\n${missing.join("\n")}\nGITIGNORE_EOF`;
+		await sandbox.exec(heredoc, { timeout: 10_000 });
+	}
+}
 
 const TRANSIENT_ERROR_PATTERNS = [
 	/container is starting/i,
@@ -218,9 +249,17 @@ export async function startTestInSandbox(
 	env: Env,
 	taskId: string,
 	task: string,
+	modelProvider?: "anthropic" | "fireworks",
 ): Promise<{ processId: string }> {
 	const sandbox = await initSandboxWithRetry(env, taskId, async (sb) => {
-		await sb.setEnvVars({ ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY });
+		const apiKey = modelProvider === "fireworks" ? env.FIREWORKS_API_KEY : env.ANTHROPIC_API_KEY;
+		const envVars: Record<string, string> = { ANTHROPIC_API_KEY: apiKey };
+
+		if (modelProvider === "fireworks") {
+			envVars.ANTHROPIC_API_BASE_URL = FIREWORKS_API_BASE_URL;
+		}
+
+		await sb.setEnvVars(envVars);
 	});
 
 	const claudeCmd = [
@@ -245,6 +284,7 @@ export interface ResearchTaskInput {
 	task: string;
 	baseBranch?: string;
 	repoConfig: RepoConfig | null;
+	modelProvider?: "anthropic" | "fireworks";
 }
 
 /**
@@ -255,7 +295,7 @@ export async function startResearchInSandbox(
 	env: Env,
 	input: ResearchTaskInput,
 ): Promise<{ processId: string; repoDir: string }> {
-	const { taskId, repo, task, baseBranch, repoConfig } = input;
+	const { taskId, repo, task, baseBranch, repoConfig, modelProvider } = input;
 	const repoName = extractRepoName(repo);
 	const repoDir = `${WORKSPACE}/${repoName}`;
 
@@ -264,10 +304,15 @@ export async function startResearchInSandbox(
 		systemPrompt += `\n\n# Specific Focus\n\nThe user is particularly interested in:\n${task}`;
 	}
 
+	const apiKey = modelProvider === "fireworks" ? env.FIREWORKS_API_KEY : env.ANTHROPIC_API_KEY;
 	const envVars: Record<string, string> = {
-		ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
+		ANTHROPIC_API_KEY: apiKey,
 		COREPACK_ENABLE_STRICT: "0",
 	};
+
+	if (modelProvider === "fireworks") {
+		envVars.ANTHROPIC_API_BASE_URL = FIREWORKS_API_BASE_URL;
+	}
 
 	const t0 = Date.now();
 	const sandbox = await initSandboxWithRetry(env, taskId, async (sb) => {
@@ -293,7 +338,7 @@ export async function startResearchInSandbox(
 	});
 	console.log(`[${taskId}] research-init: total ${Date.now() - t0}ms`);
 
-	await sandbox.exec(`chown -R agent:agent ${repoDir}`, { timeout: STEP_TIMEOUT_MS });
+	await sandbox.exec(`chown -R agent:agent ${repoDir}`, { timeout: INIT_STEP_TIMEOUT_MS });
 
 	const promptPath = `${WORKSPACE}/.system-prompt`;
 	await sandbox.writeFile(promptPath, systemPrompt);
@@ -387,6 +432,20 @@ export async function startClaudeInSandbox(
 		log(taskId, "audit-context", `injected ${auditContext.length} chars of audit context`);
 	}
 
+	if (input.hasScaffold) {
+		systemPrompt += [
+			"",
+			"",
+			"## Sandbox Environment Note",
+			"This sandbox has NO outbound internet access. Dependencies were pre-installed",
+			"by a separate scaffolding step before you started. Because of this:",
+			"- Do NOT run `npm install`, `pnpm install`, `yarn install`, or any package manager install commands — they will hang forever.",
+			"- Do NOT run `npx tsc`, `npm run build`, or other commands that require installed node_modules — binaries are not available in PATH.",
+			"- Focus on editing source files only. The CI/CD pipeline will validate builds after your PR is created.",
+			"- You CAN use `git`, `grep`, `find`, `cat`, and other standard shell tools.",
+		].join("\n");
+	}
+
 	const commitMsg = `${COMMIT_PREFIX}${task.slice(0, MAX_COMMIT_TASK_CHARS)}`;
 	const prTitle = `${PR_TITLE_PREFIX} ${task.slice(0, MAX_PR_TITLE_TASK_CHARS)}`;
 	const prBody = [
@@ -399,7 +458,7 @@ export async function startClaudeInSandbox(
 	].join("\n");
 
 	const envVars: Record<string, string> = {
-		ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
+		ANTHROPIC_API_KEY: input.modelProvider === "fireworks" ? env.FIREWORKS_API_KEY : env.ANTHROPIC_API_KEY,
 		GH_TOKEN: env.GITHUB_TOKEN,
 		_AGENT_TASK: task,
 		_COMMIT_MSG: commitMsg,
@@ -407,6 +466,10 @@ export async function startClaudeInSandbox(
 		_PR_BODY: prBody,
 		COREPACK_ENABLE_STRICT: "0",
 	};
+
+	if (input.modelProvider === "fireworks") {
+		envVars.ANTHROPIC_API_BASE_URL = FIREWORKS_API_BASE_URL;
+	}
 
 	if (env.RAILWAY_API_TOKEN && repoConfig?.platform === "railway") {
 		envVars.RAILWAY_TOKEN = env.RAILWAY_API_TOKEN;
@@ -455,13 +518,16 @@ export async function startClaudeInSandbox(
 	}
 
 	// Hand ownership to non-root 'agent' user so Claude Code accepts bypassPermissions
-	await sandbox.exec(`chown -R agent:agent ${repoDir}`, { timeout: STEP_TIMEOUT_MS });
+	await sandbox.exec(`chown -R agent:agent ${repoDir}`, { timeout: INIT_STEP_TIMEOUT_MS });
 
 	log(taskId, "git-setup");
 	await sandbox.exec(`gosu agent git -C ${repoDir} config user.name "${GIT_USER_NAME}"`, { timeout: STEP_TIMEOUT_MS });
 	await sandbox.exec(`gosu agent git -C ${repoDir} config user.email "${GIT_USER_EMAIL}"`, { timeout: STEP_TIMEOUT_MS });
-	await sandbox.exec(`gosu agent git -C ${repoDir} fetch --unshallow || true`, { timeout: STEP_TIMEOUT_MS });
+	await sandbox.exec(`gosu agent git -C ${repoDir} fetch --unshallow || true`, { timeout: INIT_STEP_TIMEOUT_MS });
 	await sandbox.exec(`gosu agent git -C ${repoDir} checkout -b ${branchName}`, { timeout: STEP_TIMEOUT_MS });
+
+	// Ensure build artifacts are gitignored BEFORE Claude starts (prevents committing node_modules, dist, etc.)
+	await ensureGitignore(sandbox, repoDir);
 
 	log(taskId, "git-push-branch", "pushing branch to remote immediately");
 	await sandbox.exec(`gosu agent git -C ${repoDir} push origin ${branchName}`, { timeout: STEP_TIMEOUT_MS });
@@ -542,10 +608,17 @@ export async function finalizeSandboxTask(
 	baseBranch: string | undefined,
 	claudeLogs: string,
 	taskDescription: string,
+	modelProvider?: "anthropic" | "fireworks",
 ): Promise<{ diff: string; prUrl: string | null; summary: string }> {
 	const sandbox = getSandbox(env.Sandbox, taskId, { keepAlive: true });
 
+	const apiKey = modelProvider === "fireworks" ? env.FIREWORKS_API_KEY : env.ANTHROPIC_API_KEY;
+	const apiBaseUrl = modelProvider === "fireworks" ? FIREWORKS_API_BASE_URL : undefined;
+
 	try {
+		// Ensure build artifacts are gitignored so we don't commit node_modules, dist, etc.
+		await ensureGitignore(sandbox, repoDir);
+
 		// Stage and commit any remaining uncommitted changes
 		log(taskId, "git-add");
 		await sandbox.exec(`gosu agent git -C ${repoDir} add -A`, { timeout: STEP_TIMEOUT_MS });
@@ -565,31 +638,32 @@ export async function finalizeSandboxTask(
 		// Compare branch against base to find ALL changes (including those Claude already committed)
 		const target = baseBranch || "main";
 		log(taskId, "git-diff", `comparing ${branchName} against origin/${target}`);
+		const MAX_DIFF_BYTES = 256 * 1024; // 256KB cap to prevent DO OOM on large diffs
 		const diffResult = await sandbox.exec(
-			`gosu agent git -C ${repoDir} diff origin/${target}...${branchName}`,
+			`gosu agent git -C ${repoDir} diff origin/${target}...${branchName} | head -c ${MAX_DIFF_BYTES}`,
 			{ timeout: STEP_TIMEOUT_MS },
 		);
 		const diff = diffResult.success ? diffResult.stdout : diffResult.stderr;
 
-		if (!diff.trim()) {
-			log(taskId, "no-changes");
-			let reason = "No code changes were produced.";
-			try {
-				reason = await generateNoSolutionReason(env.ANTHROPIC_API_KEY, taskDescription, claudeLogs);
-			} catch (err) {
-				log(taskId, "summarize-error", err instanceof Error ? err.message : String(err));
-			}
-			return { diff: "", prUrl: null, summary: reason };
-		}
-
-		log(taskId, "summarize");
-		let prBody: string;
+	if (!diff.trim()) {
+		log(taskId, "no-changes");
+		let reason = "No code changes were produced.";
 		try {
-			prBody = await generatePRSummary(env.ANTHROPIC_API_KEY, taskDescription, diff, claudeLogs);
+			reason = await generateNoSolutionReason(apiKey, taskDescription, claudeLogs, apiBaseUrl);
 		} catch (err) {
 			log(taskId, "summarize-error", err instanceof Error ? err.message : String(err));
-			prBody = [PR_BODY_HEADER, "", `**Task:** ${taskDescription}`, "", "---", PR_BODY_FOOTER].join("\n");
 		}
+		return { diff: "", prUrl: null, summary: reason };
+	}
+
+	log(taskId, "summarize");
+	let prBody: string;
+	try {
+		prBody = await generatePRSummary(apiKey, taskDescription, diff, claudeLogs, apiBaseUrl);
+	} catch (err) {
+		log(taskId, "summarize-error", err instanceof Error ? err.message : String(err));
+		prBody = [PR_BODY_HEADER, "", `**Task:** ${taskDescription}`, "", "---", PR_BODY_FOOTER].join("\n");
+	}
 
 		log(taskId, "pr-create");
 		const prBodyFile = "/tmp/pr-body.md";
@@ -636,6 +710,7 @@ export async function checkpointSandbox(
 ): Promise<{ committed: boolean }> {
 	const sandbox = getSandbox(env.Sandbox, taskId, { keepAlive: true });
 	try {
+		await ensureGitignore(sandbox, repoDir);
 		await sandbox.exec(`gosu agent git -C ${repoDir} add -A`, { timeout: STEP_TIMEOUT_MS });
 		const diffCheck = await sandbox.exec(
 			`gosu agent git -C ${repoDir} diff --cached --quiet`,
@@ -678,4 +753,30 @@ export async function destroySandbox(env: Env, taskId: string): Promise<void> {
 	} catch (err) {
 		console.error(`[${taskId}] sandbox.destroy() failed:`, err);
 	}
+}
+
+// --- Scaffold worker delegation ---
+
+export interface ScaffoldRequest {
+	repo: string;
+	branch: string;
+	commands: string[];
+	commitMessage?: string;
+}
+
+export interface ScaffoldResult {
+	ok: boolean;
+	committed?: boolean;
+	message?: string;
+	error?: string;
+	logs?: string[];
+}
+
+export async function runScaffold(env: Env, req: ScaffoldRequest): Promise<ScaffoldResult> {
+	const res = await env.SCAFFOLD_WORKER.fetch("https://scaffold/run", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(req),
+	});
+	return res.json() as Promise<ScaffoldResult>;
 }

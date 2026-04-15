@@ -5,12 +5,16 @@ interface AnthropicMessage {
 	content: string;
 }
 
+const SUMMARIZE_TIMEOUT_MS = 30_000; // 30s hard cap for AI summarization
+
 async function callAnthropic(
 	apiKey: string,
 	system: string,
 	messages: AnthropicMessage[],
+	apiBaseUrl: string = ANTHROPIC_API_BASE_URL,
 ): Promise<string> {
-	const res = await fetch(`${ANTHROPIC_API_BASE_URL}/v1/messages`, {
+	const res = await fetch(`${apiBaseUrl}/v1/messages`, {
+		signal: AbortSignal.timeout(SUMMARIZE_TIMEOUT_MS),
 		method: "POST",
 		headers: {
 			"x-api-key": apiKey,
@@ -46,6 +50,7 @@ export async function generatePRSummary(
 	task: string,
 	diff: string,
 	logs: string,
+	apiBaseUrl?: string,
 ): Promise<string> {
 	const trimmedDiff = diff.slice(0, 8000);
 	const trimmedLogs = logs.slice(-4000);
@@ -71,7 +76,7 @@ Agent logs (tail):
 ${trimmedLogs}
 \`\`\``;
 
-	return callAnthropic(apiKey, system, [{ role: "user", content: userMsg }]);
+	return callAnthropic(apiKey, system, [{ role: "user", content: userMsg }], apiBaseUrl);
 }
 
 /**
@@ -81,6 +86,7 @@ export async function generateNoSolutionReason(
 	apiKey: string,
 	task: string,
 	logs: string,
+	apiBaseUrl?: string,
 ): Promise<string> {
 	const trimmedLogs = logs.slice(-6000);
 
@@ -99,5 +105,5 @@ ${trimmedLogs}
 
 The agent exited without making any code changes. Explain why.`;
 
-	return callAnthropic(apiKey, system, [{ role: "user", content: userMsg }]);
+	return callAnthropic(apiKey, system, [{ role: "user", content: userMsg }], apiBaseUrl);
 }

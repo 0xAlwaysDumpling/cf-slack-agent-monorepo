@@ -7,6 +7,8 @@ export interface TaskRequest {
 	planId?: string;
 	continueFromTaskId?: string;
 	mode?: "default" | "research";
+	modelProvider?: "anthropic" | "fireworks";
+	scaffoldCommands?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -27,6 +29,7 @@ export interface PlanStep {
 	status: PlanStepStatus;
 	retryCount?: number;
 	continueFromTaskId?: string;
+	scaffoldCommands?: string[];
 }
 
 export interface Plan {
@@ -40,6 +43,7 @@ export interface Plan {
 	createdAt: string;
 	updatedAt: string;
 	error?: string;
+	modelProvider?: "anthropic" | "fireworks";
 }
 
 export interface PlanResult {
@@ -53,17 +57,24 @@ export interface PlanResult {
 	createdAt: string;
 	updatedAt: string;
 	error?: string;
+	modelProvider?: "anthropic" | "fireworks";
+}
+
+export interface PlanStepInput {
+	description: string;
+	scaffoldCommands?: string[];
 }
 
 export interface PlanRequest {
 	repo: string;
 	name: string;
-	steps: string[];
+	steps: (string | PlanStepInput)[];
 	branch?: string;
+	modelProvider?: "anthropic" | "fireworks";
 }
 
 export interface PlanUpdateRequest {
-	steps?: Array<{ id?: string; description: string }>;
+	steps?: Array<{ id?: string; description: string; scaffoldCommands?: string[] }>;
 	name?: string;
 }
 
@@ -106,6 +117,7 @@ export interface TaskResult {
 	priorTaskId?: string;
 	/** True when this result is a dedup rejection pointing at an existing task */
 	duplicate?: boolean;
+	modelProvider?: "anthropic" | "fireworks";
 }
 
 export interface RepoConfig {

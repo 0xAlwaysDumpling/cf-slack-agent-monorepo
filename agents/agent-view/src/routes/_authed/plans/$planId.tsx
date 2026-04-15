@@ -1,23 +1,53 @@
 import { createFileRoute, Link, useRouter } from '@tanstack/react-router'
-import { useState } from 'react'
-import { fetchPlan, runPlan, resetPlan, deletePlan } from '@/lib/api'
+import { useState, useEffect, useRef } from 'react'
+import { fetchPlan, fetchTask, runPlan, resetPlan, deletePlan } from '@/lib/api'
 import { StatusBadge } from '@/components/StatusBadge'
-import { repoName, timeAgo } from '@/lib/utils'
+import { ModelSelectorModal } from '@/components/ModelSelectorModal'
+import { repoName, timeAgo, formatTokens, formatCost } from '@/lib/utils'
+
+const POLL_INTERVAL_MS = 5_000
 
 export const Route = createFileRoute('/_authed/plans/$planId')({
-  loader: ({ params }) => fetchPlan({ data: { planId: params.planId } }),
+  loader: async ({ params }) => {
+    const plan = await fetchPlan({ data: { planId: params.planId } })
+    const taskIds = (plan.steps ?? []).map((s) => s.taskId).filter(Boolean) as string[]
+    const tasks = await Promise.all(
+      taskIds.map((id) => fetchTask({ data: { taskId: id } }).catch(() => null))
+    )
+    const taskMap: Record<string, { usage?: { inputTokens?: number; outputTokens?: number; costUsd?: number } }> = {}
+    for (const t of tasks) {
+      if (t?.id) taskMap[t.id] = t
+    }
+    return { plan, taskMap }
+  },
   component: PlanDetailPage,
 })
 
 function PlanDetailPage() {
-  const plan = Route.useLoaderData()
+  const { plan, taskMap } = Route.useLoaderData()
   const router = useRouter()
   const [actionLoading, setActionLoading] = useState(false)
+  const [modelModalOpen, setModelModalOpen] = useState(false)
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const handleRun = async () => {
+  useEffect(() => {
+    if (plan.status === 'running') {
+      intervalRef.current = setInterval(() => router.invalidate(), POLL_INTERVAL_MS)
+    }
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current)
+    }
+  }, [plan.status, router])
+
+  const handleRunClick = () => {
+    setModelModalOpen(true)
+  }
+
+  const handleModelConfirm = async (modelProvider: 'anthropic' | 'fireworks') => {
+    setModelModalOpen(false)
     setActionLoading(true)
     try {
-      await runPlan({ data: { planId: plan.id } })
+      await runPlan({ data: { planId: plan.id, modelProvider } })
       router.invalidate()
     } finally {
       setActionLoading(false)
@@ -68,7 +98,7 @@ function PlanDetailPage() {
           <div className="flex gap-2 flex-wrap shrink-0">
             {plan.status === 'draft' && (
               <button
-                onClick={handleRun}
+                onClick={handleRunClick}
                 disabled={actionLoading}
                 className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-700 text-white text-sm rounded-lg transition-colors cursor-pointer"
               >
@@ -180,9 +210,32 @@ function PlanDetailPage() {
                 </a>
               )}
             </div>
+            {step.taskId && taskMap[step.taskId]?.usage && (() => {
+              const u = taskMap[step.taskId]!.usage!
+              const hasTokens = (u.inputTokens ?? 0) > 0 || (u.outputTokens ?? 0) > 0
+              if (!hasTokens && !u.costUsd) return null
+              return (
+                <div className="flex items-center gap-3 mt-2 ml-8 text-xs text-gray-500">
+                  {hasTokens && (
+                    <span>{formatTokens(u.inputTokens ?? 0)} in · {formatTokens(u.outputTokens ?? 0)} out</span>
+                  )}
+                  {u.costUsd != null && u.costUsd > 0 && (
+                    <span>{formatCost(u.costUsd)}</span>
+                  )}
+                </div>
+              )
+            })()}
           </div>
         ))}
       </div>
+
+      <ModelSelectorModal
+        open={modelModalOpen}
+        context="run-plan"
+        onConfirm={handleModelConfirm}
+        onCancel={() => setModelModalOpen(false)}
+        isLoading={actionLoading}
+      />
     </div>
   )
 }

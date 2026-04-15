@@ -1,10 +1,13 @@
 import { createFileRoute, Link, useRouter } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { fetchTask, fetchTaskLogs, fetchTaskSession, retryTask, cancelTask, continueTask } from '@/lib/api'
 import { StatusBadge, OutcomeBadge } from '@/components/StatusBadge'
 import { LogViewer } from '@/components/LogViewer'
 import { DiffViewer } from '@/components/DiffViewer'
+import { ModelSelectorModal } from '@/components/ModelSelectorModal'
 import { repoName, timeAgo, formatDuration, formatTokens, formatCost } from '@/lib/utils'
+
+const POLL_INTERVAL_MS = 5_000
 
 export const Route = createFileRoute('/_authed/tasks/$taskId')({
   loader: async ({ params }) => {
@@ -23,11 +26,36 @@ function TaskDetailPage() {
   const router = useRouter()
   const [tab, setTab] = useState<'summary' | 'logs' | 'diff'>('summary')
   const [actionLoading, setActionLoading] = useState(false)
+  const [modelModalOpen, setModelModalOpen] = useState(false)
+  const [pendingAction, setPendingAction] = useState<'retry' | 'run' | null>(null)
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const handleRetry = async () => {
+  const isActive = task.status === 'running' || task.status === 'pending'
+
+  useEffect(() => {
+    if (isActive) {
+      intervalRef.current = setInterval(() => router.invalidate(), POLL_INTERVAL_MS)
+    }
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current)
+    }
+  }, [isActive, router])
+
+  const handleRetryClick = () => {
+    setPendingAction('retry')
+    setModelModalOpen(true)
+  }
+
+  const handleRunClick = () => {
+    setPendingAction('run')
+    setModelModalOpen(true)
+  }
+
+  const handleModelConfirm = async (modelProvider: 'anthropic' | 'fireworks') => {
+    setModelModalOpen(false)
     setActionLoading(true)
     try {
-      const result = await retryTask({ data: { repo: task.repo, task: task.task, branch: task.branch } })
+      const result = await retryTask({ data: { repo: task.repo, task: task.task, branch: task.branch, modelProvider } })
       if (result.id && !result.duplicate) {
         router.navigate({ to: '/tasks/$taskId', params: { taskId: result.id } })
       } else {
@@ -35,6 +63,7 @@ function TaskDetailPage() {
       }
     } finally {
       setActionLoading(false)
+      setPendingAction(null)
     }
   }
 
@@ -110,11 +139,18 @@ function TaskDetailPage() {
                   {actionLoading ? '...' : 'Continue'}
                 </button>
                 <button
-                  onClick={handleRetry}
+                  onClick={handleRetryClick}
                   disabled={actionLoading}
                   className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-700 text-white text-sm rounded-lg transition-colors cursor-pointer"
                 >
                   {actionLoading ? '...' : 'Retry'}
+                </button>
+                <button
+                  onClick={handleRunClick}
+                  disabled={actionLoading}
+                  className="px-3 py-1.5 bg-green-600 hover:bg-green-500 disabled:bg-gray-700 text-white text-sm rounded-lg transition-colors cursor-pointer"
+                >
+                  {actionLoading ? '...' : 'Run'}
                 </button>
               </>
             )}
@@ -133,6 +169,15 @@ function TaskDetailPage() {
                 className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded-lg transition-colors cursor-pointer"
               >
                 Refresh
+              </button>
+            )}
+            {task.status === 'completed' && (
+              <button
+                onClick={handleRunClick}
+                disabled={actionLoading}
+                className="px-3 py-1.5 bg-green-600 hover:bg-green-500 disabled:bg-gray-700 text-white text-sm rounded-lg transition-colors cursor-pointer"
+              >
+                {actionLoading ? '...' : 'Run'}
               </button>
             )}
           </div>
@@ -240,6 +285,17 @@ function TaskDetailPage() {
       )}
       {tab === 'logs' && <LogViewer logs={logs} />}
       {tab === 'diff' && <DiffViewer diff={diff} />}
+
+      <ModelSelectorModal
+        open={modelModalOpen}
+        context={pendingAction === 'retry' ? 'retry-task' : 'run-task'}
+        onConfirm={handleModelConfirm}
+        onCancel={() => {
+          setModelModalOpen(false)
+          setPendingAction(null)
+        }}
+        isLoading={actionLoading}
+      />
     </div>
   )
 }

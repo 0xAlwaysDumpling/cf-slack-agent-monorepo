@@ -4,7 +4,7 @@ import type {
 	Plan, PlanResult, PlanRequest, PlanUpdateRequest, PlanStep,
 	AuditResult,
 } from "./types";
-import { startClaudeInSandbox, startTestInSandbox, startResearchInSandbox, pollClaudeLogs, finalizeSandboxTask, destroySandbox, checkpointSandbox, parseClaudeUsage, detectCliStartupFailure, type TaskUsage } from "./sandbox";
+import { startClaudeInSandbox, startTestInSandbox, startResearchInSandbox, pollClaudeLogs, finalizeSandboxTask, destroySandbox, checkpointSandbox, parseClaudeUsage, detectCliStartupFailure, runScaffold, type TaskUsage } from "./sandbox";
 import { PromptManager } from "./prompts";
 import type { PlanStepContext } from "./prompts";
 import {
@@ -25,6 +25,82 @@ import {
 } from "./config/constants";
 
 const POLL_INTERVAL_MS = 5_000;
+
+// ---------------------------------------------------------------------------
+// Scaffold auto-detection
+// ---------------------------------------------------------------------------
+
+const SCAFFOLD_PATTERNS: Array<{ pattern: RegExp; commands: (desc: string) => string[] }> = [
+	{
+		// "npm install" / "pnpm install" / "yarn install" with optional directory context
+		pattern: /\b(npm|pnpm|yarn)\s+install\b/i,
+		commands: (desc) => {
+			const dir = extractWorkDir(desc);
+			const mgr = desc.match(/\b(pnpm|yarn)\b/i)?.[1]?.toLowerCase() ?? "npm";
+			return dir ? [`cd ${dir} && ${mgr} install`] : [`${mgr} install`];
+		},
+	},
+	{
+		// "add <package>" with a package manager
+		pattern: /\b(npm|pnpm|yarn)\s+add\s+/i,
+		commands: (desc) => {
+			const dir = extractWorkDir(desc);
+			const after = desc.replace(/^.*?\b(?:npm|pnpm|yarn)\s+add\s+/i, "");
+			// Collect tokens that look like npm packages: @scope/name or kebab-case name
+			// Stop at prepositions, articles, or bare paths (contain / but no @ prefix)
+			const pkgs: string[] = [];
+			for (const t of after.split(/\s+/)) {
+				if (/^(in|to|for|at|the|and|or|into|from|with|directory|folder|dir)$/i.test(t)) break;
+				if (/\//.test(t) && !t.startsWith("@")) break;
+				if (/^@?[a-z0-9][\w.-]*(?:\/[a-z0-9][\w.-]*)?$/i.test(t)) pkgs.push(t);
+				else break;
+			}
+			if (!pkgs.length) return [];
+			const mgr = desc.match(/\b(pnpm|yarn)\b/i)?.[1]?.toLowerCase() ?? "npm";
+			return dir ? [`cd ${dir} && ${mgr} add ${pkgs.join(" ")}`] : [`${mgr} add ${pkgs.join(" ")}`];
+		},
+	},
+	{
+		// "install dependencies" / "set up dependencies"
+		pattern: /\b(install|set\s*up)\s+(the\s+)?dependenc/i,
+		commands: (desc) => {
+			const dir = extractWorkDir(desc);
+			return dir ? [`cd ${dir} && npm install`] : ["npm install"];
+		},
+	},
+	{
+		// "scaffold" / "initialize" a new worker/project/package
+		pattern: /\b(scaffold|initialize|init)\b.*\b(worker|project|package|directory|app)\b/i,
+		commands: (desc) => {
+			const dir = extractWorkDir(desc);
+			return dir ? [`cd ${dir} && npm install`] : ["npm install"];
+		},
+	},
+	{
+		// "create ... with ... dependencies" (e.g., "create worker with hono and better-auth dependencies")
+		pattern: /\bcreate\b.*\bwith\b.*\bdependenc/i,
+		commands: (desc) => {
+			const dir = extractWorkDir(desc);
+			return dir ? [`cd ${dir} && npm install`] : ["npm install"];
+		},
+	},
+];
+
+function extractWorkDir(desc: string): string | null {
+	// Match paths like "workers/api", "packages/shared" — but not scoped packages (@scope/name)
+	const dirMatch = desc.match(/\b(?:in\s+|into\s+|under\s+|at\s+)(?:the\s+)?([a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)+)\s*(?:directory|folder|dir|$|\s)/i);
+	return dirMatch?.[1] ?? null;
+}
+
+function inferScaffoldCommands(description: string): string[] | undefined {
+	for (const { pattern, commands } of SCAFFOLD_PATTERNS) {
+		if (pattern.test(description)) {
+			const cmds = commands(description);
+			if (cmds.length > 0) return cmds;
+		}
+	}
+	return undefined;
+}
 
 interface GitHubPR {
 	number: number;
@@ -47,6 +123,8 @@ interface StoredTask {
 	planId?: string;
 	priorTaskId?: string;
 	mode?: "default" | "research";
+	modelProvider?: "anthropic" | "fireworks";
+	scaffoldCommands?: string[];
 	step?: string;
 	logs?: string;
 	diff?: string;
@@ -268,11 +346,15 @@ export class DevAgent extends DurableObject<Env> {
 		const id = crypto.randomUUID().slice(0, PLAN_ID_LENGTH);
 		const now = new Date().toISOString();
 
-		const steps: PlanStep[] = request.steps.map((desc) => ({
-			id: crypto.randomUUID().slice(0, 8),
-			description: desc,
-			status: "pending" as const,
-		}));
+		const steps: PlanStep[] = request.steps.map((input) => {
+			const isObj = typeof input === "object";
+			return {
+				id: crypto.randomUUID().slice(0, 8),
+				description: isObj ? input.description : input,
+				status: "pending" as const,
+				scaffoldCommands: isObj ? input.scaffoldCommands : undefined,
+			};
+		});
 
 		const plan: Plan = {
 			id,
@@ -284,6 +366,7 @@ export class DevAgent extends DurableObject<Env> {
 			currentStepIndex: 0,
 			createdAt: now,
 			updatedAt: now,
+			modelProvider: request.modelProvider,
 		};
 
 		await this.savePlan(plan);
@@ -334,6 +417,7 @@ export class DevAgent extends DurableObject<Env> {
 				id: s.id ?? crypto.randomUUID().slice(0, 8),
 				description: s.description,
 				status: "pending" as const,
+				scaffoldCommands: s.scaffoldCommands,
 			}));
 		}
 
@@ -438,12 +522,16 @@ export class DevAgent extends DurableObject<Env> {
 			console.log(`[plan:${plan.id}] Injected audit context (${audit.analysis.length} chars) into step ${stepIndex}`);
 		}
 
+		const scaffoldCmds = step.scaffoldCommands ?? inferScaffoldCommands(step.description);
+
 		const taskResult = await this.createTask({
 			repo: plan.repo,
 			task: step.description,
 			branch: baseBranch,
 			planId: plan.id,
 			continueFromTaskId: step.continueFromTaskId,
+			modelProvider: plan.modelProvider,
+			scaffoldCommands: scaffoldCmds,
 		});
 
 		// Store the built prompt in R2 keyed by taskId — avoids bloating DO storage
@@ -541,6 +629,8 @@ export class DevAgent extends DurableObject<Env> {
 			repoConfig,
 			planId: request.planId,
 			mode: request.mode,
+			modelProvider: request.modelProvider,
+			scaffoldCommands: request.scaffoldCommands,
 			createdAt: now,
 			updatedAt: now,
 		};
@@ -1010,6 +1100,28 @@ export class DevAgent extends DurableObject<Env> {
 			task.step = "sandbox-init";
 			await this.saveTask(task);
 
+			// Run scaffold pre-phase if needed (installs deps via internet-enabled container)
+			if (task.scaffoldCommands?.length && !isTestMode && !isResearchMode) {
+				task.step = "scaffold";
+				await this.saveTask(task);
+				console.log(`[${task.id}] Running scaffold: ${task.scaffoldCommands.join("; ")}`);
+
+				const scaffoldResult = await runScaffold(this.env, {
+					repo: task.repo,
+					branch: task.branch,
+					commands: task.scaffoldCommands,
+					commitMessage: `chore: scaffold setup (${task.scaffoldCommands[0]})`,
+				});
+
+				if (!scaffoldResult.ok) {
+					throw new Error(`Scaffold failed: ${scaffoldResult.error}`);
+				}
+
+				const action = scaffoldResult.committed ? "committed and pushed" : "no changes";
+				console.log(`[${task.id}] Scaffold complete (${action})`);
+				await this.appendLogs(task.id, `[scaffold] ${action}\n${(scaffoldResult.logs ?? []).join("\n")}\n`);
+			}
+
 			// Load cached audit for non-test, non-research tasks
 			let auditContext: string | undefined;
 			if (!isTestMode && !isResearchMode) {
@@ -1048,6 +1160,8 @@ export class DevAgent extends DurableObject<Env> {
 					repoConfig: task.repoConfig,
 					continueFrom: task.priorTaskId ? { priorTaskId: task.priorTaskId } : undefined,
 					auditContext,
+					modelProvider: task.modelProvider,
+					hasScaffold: !!task.scaffoldCommands?.length,
 				});
 				task.step = "claude-code";
 				task.processId = processId;
@@ -1201,7 +1315,9 @@ export class DevAgent extends DurableObject<Env> {
 				task.step = "finalizing";
 				await this.saveTask(task);
 
-				const { diff, prUrl, summary } = await finalizeSandboxTask(
+			const FINALIZE_TIMEOUT_MS = 3 * 60 * 1000; // 3 min hard cap for entire finalization
+			const { diff, prUrl, summary } = await Promise.race([
+				finalizeSandboxTask(
 					this.env,
 					task.id,
 					task.repoDir!,
@@ -1209,7 +1325,12 @@ export class DevAgent extends DurableObject<Env> {
 					task.branch,
 					allLogs,
 					task.task,
-				);
+					task.modelProvider,
+				),
+				new Promise<never>((_, reject) =>
+					setTimeout(() => reject(new Error("Finalization timed out (3m)")), FINALIZE_TIMEOUT_MS),
+				),
+			]);
 
 				task.status = "completed";
 				task.step = "done";
@@ -1771,6 +1892,7 @@ export class DevAgent extends DurableObject<Env> {
 			outcome: task.outcome,
 			usage: task.usage,
 			priorTaskId: task.priorTaskId,
+			modelProvider: task.modelProvider,
 		};
 	}
 }

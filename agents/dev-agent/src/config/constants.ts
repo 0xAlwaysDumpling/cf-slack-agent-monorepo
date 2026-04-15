@@ -11,13 +11,14 @@ export const MCP_TEAM_ID = "system";
 // ---------------------------------------------------------------------------
 export const GITHUB_API_BASE_URL = "https://api.github.com";
 export const ANTHROPIC_API_BASE_URL = "https://api.anthropic.com";
+export const FIREWORKS_API_BASE_URL = "https://api.fireworks.ai/inference/v1";
 export const RAILWAY_GRAPHQL_URL = "https://backboard.railway.com/graphql/v2";
 
 // ---------------------------------------------------------------------------
 // Git identity & defaults
 // ---------------------------------------------------------------------------
 export const GIT_USER_NAME = "Dev Agent";
-export const GIT_USER_EMAIL = "dev-agent@example.com";
+export const GIT_USER_EMAIL = "dev-agent@nostalgic.dev";
 export const DEFAULT_GIT_BRANCH = "main";
 export const DEFAULT_BRANCH_PREFIX = "dev-agent/";
 

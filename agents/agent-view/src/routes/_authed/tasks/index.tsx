@@ -1,8 +1,10 @@
 import { createFileRoute, Link, useRouter } from '@tanstack/react-router'
-import { useState } from 'react'
-import { fetchTasks, retryTask, cancelTask, continueTask } from '@/lib/api'
+import { useState, useEffect, useRef } from 'react'
+import { fetchTasks, retryTask, cancelTask, continueTask, deleteTask } from '@/lib/api'
 import { StatusBadge, OutcomeBadge } from '@/components/StatusBadge'
 import { repoName, timeAgo, truncate, formatCost, formatTokens } from '@/lib/utils'
+
+const POLL_INTERVAL_MS = 5_000
 
 export const Route = createFileRoute('/_authed/tasks/')({
   loader: () => fetchTasks(),
@@ -13,6 +15,18 @@ function TasksPage() {
   const tasks = Route.useLoaderData()
   const router = useRouter()
   const [loadingAction, setLoadingAction] = useState<Record<string, string>>({})
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const hasActive = tasks.some((t) => t.status === 'running' || t.status === 'pending')
+
+  useEffect(() => {
+    if (hasActive) {
+      intervalRef.current = setInterval(() => router.invalidate(), POLL_INTERVAL_MS)
+    }
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current)
+    }
+  }, [hasActive, router])
 
   const withAction = async (taskId: string, action: string, fn: () => Promise<void>) => {
     setLoadingAction((prev) => ({ ...prev, [taskId]: action }))
@@ -53,6 +67,12 @@ function TasksPage() {
       router.invalidate()
     })
 
+  const handleDelete = (task: (typeof tasks)[0]) =>
+    withAction(task.id, 'delete', async () => {
+      await deleteTask({ data: { taskId: task.id } })
+      router.invalidate()
+    })
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -65,7 +85,7 @@ function TasksPage() {
           const busy = loadingAction[task.id]
           const isFailed = task.status === 'failed' || task.status === 'cancelled'
           const isActive = task.status === 'running' || task.status === 'pending'
-          const hasActions = isFailed || isActive || !!task.prUrl
+          const isDone = !isActive
 
           return (
             <Link
@@ -93,48 +113,55 @@ function TasksPage() {
                     )}
                   </div>
                 </div>
-                {hasActions && (
-                  <div className="flex items-center gap-2 flex-wrap" onClick={(e) => e.preventDefault()}>
-                    {isFailed && (
-                      <>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleContinue(task) }}
-                          disabled={!!busy}
-                          className="px-3 py-1.5 bg-amber-600/80 hover:bg-amber-500 disabled:bg-gray-700 text-white text-xs rounded transition-colors cursor-pointer"
-                        >
-                          {busy === 'continue' ? '...' : 'Continue'}
-                        </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleRetry(task) }}
-                          disabled={!!busy}
-                          className="px-3 py-1.5 bg-cyan-600/80 hover:bg-cyan-500 disabled:bg-gray-700 text-white text-xs rounded transition-colors cursor-pointer"
-                        >
-                          {busy === 'retry' ? '...' : 'Retry'}
-                        </button>
-                      </>
-                    )}
-                    {isActive && (
+                <div className="flex items-center gap-2 flex-wrap" onClick={(e) => e.preventDefault()}>
+                  {isFailed && (
+                    <>
                       <button
-                        onClick={(e) => { e.stopPropagation(); handleCancel(task) }}
+                        onClick={(e) => { e.stopPropagation(); handleContinue(task) }}
                         disabled={!!busy}
-                        className="px-3 py-1.5 bg-red-600/80 hover:bg-red-500 disabled:bg-gray-700 text-white text-xs rounded transition-colors cursor-pointer"
+                        className="px-3 py-1.5 bg-amber-600/80 hover:bg-amber-500 disabled:bg-gray-700 text-white text-xs rounded transition-colors cursor-pointer"
                       >
-                        {busy === 'cancel' ? '...' : 'Cancel'}
+                        {busy === 'continue' ? '...' : 'Continue'}
                       </button>
-                    )}
-                    {task.prUrl && (
-                      <a
-                        href={task.prUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className="px-3 py-1.5 bg-green-500/10 text-green-400 text-xs rounded border border-green-500/20 hover:bg-green-500/20 transition-colors no-underline"
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleRetry(task) }}
+                        disabled={!!busy}
+                        className="px-3 py-1.5 bg-cyan-600/80 hover:bg-cyan-500 disabled:bg-gray-700 text-white text-xs rounded transition-colors cursor-pointer"
                       >
-                        PR
-                      </a>
-                    )}
-                  </div>
-                )}
+                        {busy === 'retry' ? '...' : 'Retry'}
+                      </button>
+                    </>
+                  )}
+                  {isActive && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleCancel(task) }}
+                      disabled={!!busy}
+                      className="px-3 py-1.5 bg-red-600/80 hover:bg-red-500 disabled:bg-gray-700 text-white text-xs rounded transition-colors cursor-pointer"
+                    >
+                      {busy === 'cancel' ? '...' : 'Cancel'}
+                    </button>
+                  )}
+                  {task.prUrl && (
+                    <a
+                      href={task.prUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className="px-3 py-1.5 bg-green-500/10 text-green-400 text-xs rounded border border-green-500/20 hover:bg-green-500/20 transition-colors no-underline"
+                    >
+                      PR
+                    </a>
+                  )}
+                  {isDone && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleDelete(task) }}
+                      disabled={!!busy}
+                      className="px-3 py-1.5 bg-red-600/80 hover:bg-red-500 disabled:bg-gray-700 text-white text-xs rounded transition-colors cursor-pointer"
+                    >
+                      {busy === 'delete' ? '...' : 'Delete'}
+                    </button>
+                  )}
+                </div>
               </div>
             </Link>
           )
