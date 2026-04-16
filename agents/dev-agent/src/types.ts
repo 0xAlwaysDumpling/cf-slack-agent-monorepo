@@ -42,6 +42,7 @@ export interface Plan {
 	updatedAt: string;
 	error?: string;
 	modelProvider?: "anthropic" | "fireworks";
+	usage?: TaskUsageResult;
 }
 
 export interface PlanResult {
@@ -56,6 +57,7 @@ export interface PlanResult {
 	updatedAt: string;
 	error?: string;
 	modelProvider?: "anthropic" | "fireworks";
+	usage?: TaskUsageResult;
 }
 
 export interface PlanStepInput {

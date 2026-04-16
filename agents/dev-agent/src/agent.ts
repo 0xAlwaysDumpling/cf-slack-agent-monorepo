@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import type {
-	TaskRequest, TaskResult, TaskStatus, TaskOutcome, RepoConfig,
+	TaskRequest, TaskResult, TaskStatus, TaskOutcome, RepoConfig, TaskUsageResult,
 	Plan, PlanResult, PlanRequest, PlanUpdateRequest, PlanStep,
 	AuditResult,
 } from "./types";
@@ -232,7 +232,53 @@ export class DevAgent extends DurableObject<Env> {
 		await this.ctx.storage.put(`${STORAGE_KEY_PLAN_PREFIX}${plan.id}`, JSON.stringify(plan));
 	}
 
-	private planToResult(plan: Plan): PlanResult {
+	private async planToResult(plan: Plan): Promise<PlanResult> {
+		// Aggregate usage from all completed steps
+		let aggregatedUsage: TaskUsageResult | undefined;
+		
+		if (plan.steps && plan.steps.length > 0) {
+			const completedSteps = plan.steps.filter(s => s.taskId && (s.status === "completed" || s.status === "merged"));
+			
+			if (completedSteps.length > 0) {
+				let totalInputTokens = 0;
+				let totalOutputTokens = 0;
+				let totalCacheReadTokens = 0;
+				let totalCacheWriteTokens = 0;
+				let totalCostUsd = 0;
+				let totalTurns = 0;
+				let totalDurationMs = 0;
+				
+				for (const step of completedSteps) {
+					if (step.taskId) {
+						const task = await this.getTask(step.taskId);
+						if (task?.usage) {
+							totalInputTokens += task.usage.inputTokens ?? 0;
+							totalOutputTokens += task.usage.outputTokens ?? 0;
+							totalCacheReadTokens += task.usage.cacheReadTokens ?? 0;
+							totalCacheWriteTokens += task.usage.cacheWriteTokens ?? 0;
+							totalCostUsd += task.usage.costUsd ?? 0;
+							totalTurns += task.usage.numTurns ?? 0;
+							if (task.usage.durationMs) {
+								totalDurationMs += task.usage.durationMs;
+							}
+						}
+					}
+				}
+				
+				if (totalInputTokens > 0 || totalOutputTokens > 0 || totalCostUsd > 0) {
+					aggregatedUsage = {
+						inputTokens: totalInputTokens,
+						outputTokens: totalOutputTokens,
+						cacheReadTokens: totalCacheReadTokens,
+						cacheWriteTokens: totalCacheWriteTokens,
+						costUsd: totalCostUsd,
+						numTurns: totalTurns,
+						durationMs: totalDurationMs > 0 ? totalDurationMs : undefined,
+					};
+				}
+			}
+		}
+		
 		return {
 			id: plan.id,
 			repo: plan.repo,
@@ -244,6 +290,7 @@ export class DevAgent extends DurableObject<Env> {
 			createdAt: plan.createdAt,
 			updatedAt: plan.updatedAt,
 			error: plan.error,
+			usage: aggregatedUsage,
 		};
 	}
 
@@ -278,8 +325,7 @@ export class DevAgent extends DurableObject<Env> {
 			return {
 				id: crypto.randomUUID().slice(0, 8),
 				description: isObj ? input.description : input,
-				status: "pending" as const,
-				scaffoldCommands: isObj ? input.scaffoldCommands : undefined,
+			status: "pending" as const,
 			};
 		});
 
@@ -303,7 +349,7 @@ export class DevAgent extends DurableObject<Env> {
 		await this.ctx.storage.put(STORAGE_KEY_ACTIVE_PLAN_IDS, planIds);
 
 		console.log(`[plan:${id}] Created "${plan.name}" with ${steps.length} steps`);
-		return this.planToResult(plan);
+		return await this.planToResult(plan);
 	}
 
 	async getPlanStatus(planId: string): Promise<PlanResult | null> {
@@ -317,11 +363,11 @@ export class DevAgent extends DurableObject<Env> {
 				plan.steps.some((s) => !s.prNumber && s.status !== "pending" && s.status !== "merged") ||
 				(plan.status === "running" && !plan.steps.some((s) => s.status === "running"));
 			if (needsReconcile) {
-				return await this.reconcilePlan(planId) ?? this.planToResult(plan);
+				return await this.reconcilePlan(planId) ?? await this.planToResult(plan);
 			}
 		}
 
-		return this.planToResult(plan);
+		return await this.planToResult(plan);
 	}
 
 	async updatePlan(planId: string, changes: PlanUpdateRequest): Promise<PlanResult | null> {
@@ -329,8 +375,9 @@ export class DevAgent extends DurableObject<Env> {
 		if (!plan) return null;
 
 		if (plan.status !== "draft") {
+			const result = await this.planToResult(plan);
 			return {
-				...this.planToResult(plan),
+				...result,
 				error: `Cannot update plan — status is "${plan.status}", must be "draft"`,
 			};
 		}
@@ -340,17 +387,16 @@ export class DevAgent extends DurableObject<Env> {
 		}
 
 		if (changes.steps) {
-			plan.steps = changes.steps.map((s) => ({
-				id: s.id ?? crypto.randomUUID().slice(0, 8),
-				description: s.description,
-				status: "pending" as const,
-				scaffoldCommands: s.scaffoldCommands,
-			}));
+		plan.steps = changes.steps.map((s) => ({
+			id: s.id ?? crypto.randomUUID().slice(0, 8),
+			description: s.description,
+			status: "pending" as const,
+		}));
 		}
 
 		await this.savePlan(plan);
 		console.log(`[plan:${planId}] Updated — ${plan.steps.length} steps`);
-		return this.planToResult(plan);
+		return await this.planToResult(plan);
 	}
 
 	async listPlans(): Promise<PlanResult[]> {
@@ -370,15 +416,17 @@ export class DevAgent extends DurableObject<Env> {
 		if (!plan) return null;
 
 		if (plan.status !== "draft") {
+			const result = await this.planToResult(plan);
 			return {
-				...this.planToResult(plan),
+				...result,
 				error: `Cannot run plan — status is "${plan.status}", must be "draft"`,
 			};
 		}
 
 		if (plan.steps.length === 0) {
+			const result = await this.planToResult(plan);
 			return {
-				...this.planToResult(plan),
+				...result,
 				error: "Cannot run plan — no steps defined",
 			};
 		}
@@ -397,7 +445,7 @@ export class DevAgent extends DurableObject<Env> {
 		if (startIndex >= plan.steps.length) {
 			plan.status = "completed";
 			await this.savePlan(plan);
-			return this.planToResult(plan);
+			return await this.planToResult(plan);
 		}
 
 		plan.status = "running";
@@ -405,7 +453,7 @@ export class DevAgent extends DurableObject<Env> {
 		await this.savePlan(plan);
 
 		await this.startPlanStep(plan, startIndex);
-		return this.planToResult(await this.getPlan(planId) as Plan);
+		return await this.planToResult(await this.getPlan(planId) as Plan);
 	}
 
 	private async startPlanStep(plan: Plan, stepIndex: number): Promise<void> {
@@ -1451,14 +1499,14 @@ export class DevAgent extends DurableObject<Env> {
 			}
 		}
 
-		if (changed) {
-			await this.savePlan(plan);
-			await this.archivePlan(plan);
-			console.log(`[plan:${planId}] Updated ${merged.length} step(s)`);
-		}
-
-		return this.planToResult(plan);
+	if (changed) {
+		await this.savePlan(plan);
+		await this.archivePlan(plan);
+		console.log(`[plan:${planId}] Updated ${merged.length} step(s)`);
 	}
+
+	return await this.planToResult(plan);
+}
 
 	/**
 	 * Reconcile a plan by checking actual task states and GitHub PR states.
@@ -1554,13 +1602,13 @@ export class DevAgent extends DurableObject<Env> {
 			changed = true;
 		}
 
-		if (changed) {
-			await this.savePlan(plan);
-			await this.archivePlan(plan);
-		}
-
-		return this.planToResult(plan);
+	if (changed) {
+		await this.savePlan(plan);
+		await this.archivePlan(plan);
 	}
+
+	return await this.planToResult(plan);
+}
 
 	private matchPRToStep(step: PlanStep, prs: GitHubPR[], plan: Plan): GitHubPR | null {
 		// Only match PRs whose head branch corresponds to a task in THIS plan
@@ -1680,10 +1728,10 @@ export class DevAgent extends DurableObject<Env> {
 		plan.status = "draft";
 		plan.currentStepIndex = 0;
 		plan.error = undefined;
-		await this.savePlan(plan);
-		console.log(`[plan:${planId}] Reset to draft`);
-		return this.planToResult(plan);
-	}
+	await this.savePlan(plan);
+	console.log(`[plan:${planId}] Reset to draft`);
+	return await this.planToResult(plan);
+}
 
 	// =========================================================================
 	// Repo config
