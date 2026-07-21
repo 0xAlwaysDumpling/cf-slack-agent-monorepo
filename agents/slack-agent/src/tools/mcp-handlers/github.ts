@@ -478,6 +478,154 @@ export function createGitHubMCPTools(): ToolDefinition[] {
       },
     },
     {
+      name: "github.setup-ci",
+      description: `Set up CI/autodeploy on an EXISTING repo: sets the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID Actions secrets required by the deploy-workers workflow, and optionally creates the Cloudflare Pages project. Use to repair repos that were scaffolded before this automation existed or where the create-repo secrets step failed.`,
+      category: "shared",
+      version: 1,
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo: {
+            type: "string",
+            description: `Repo name (defaults to GITHUB_ORG owner), "owner/repo", or GitHub URL.`,
+          },
+          create_pages_project: {
+            type: "boolean",
+            description:
+              "If true, also create a Cloudflare Pages project linked to the repo (apps/web, pnpm build) when one does not already exist. Default false.",
+          },
+        },
+        required: ["repo"],
+      },
+      handler: async (params: ToolExecutionParams, context: ToolContext): Promise<MCPToolResult> => {
+        const cfToken = context.env?.CF_API_TOKEN || context.env?.CF_AIG_TOKEN;
+        const cfAccountId = context.env?.CF_ACCOUNT_ID;
+        if (!cfToken || !cfAccountId) {
+          return text(JSON.stringify({ error: "CF_API_TOKEN or CF_ACCOUNT_ID not set on the agent" }));
+        }
+
+        let repo = (params.repo as string).trim();
+        const urlMatch = repo.match(/github\.com\/([^/]+\/[^/.]+)/);
+        if (urlMatch) repo = urlMatch[1];
+        if (!repo.includes("/")) {
+          if (!GITHUB_ORG) return text(JSON.stringify({ error: "Bare repo name given but GITHUB_ORG not configured" }));
+          repo = `${GITHUB_ORG}/${repo}`;
+        }
+        const repoName = repo.split("/")[1];
+
+        // Setting Actions secrets needs a token with the repo "Secrets" write permission;
+        // try both configured tokens so a scope gap on one doesn't fail the whole repair.
+        const tokens = [context.env?.GITHUB_REPO_CREATE_TOKEN, context.env?.GITHUB_TOKEN].filter(
+          (t, i, arr): t is string => Boolean(t) && arr.indexOf(t) === i
+        );
+        if (tokens.length === 0) {
+          return text(JSON.stringify({ error: "GITHUB_REPO_CREATE_TOKEN / GITHUB_TOKEN not configured" }));
+        }
+
+        const secretErrors: string[] = [];
+        let secretsOk = false;
+        for (const token of tokens) {
+          try {
+            await setRepoSecret(token, repo, "CLOUDFLARE_API_TOKEN", cfToken);
+            await setRepoSecret(token, repo, "CLOUDFLARE_ACCOUNT_ID", cfAccountId);
+            secretsOk = true;
+            break;
+          } catch (err) {
+            secretErrors.push(err instanceof Error ? err.message : String(err));
+          }
+        }
+
+        if (!secretsOk) {
+          return text(
+            JSON.stringify({
+              error: "Failed to set repo secrets",
+              details: secretErrors.join(" | "),
+              hint: secretErrors.some((e) => e.includes("403"))
+                ? `The GitHub token(s) lack the "Secrets" read/write permission on ${repo}. Update the fine-grained PAT to include it.`
+                : undefined,
+            })
+          );
+        }
+
+        let pagesResult: Record<string, unknown> | null = null;
+        if (params.create_pages_project === true) {
+          try {
+            const existingRes = await fetch(
+              `https://api.cloudflare.com/client/v4/accounts/${cfAccountId}/pages/projects/${repoName}`,
+              { headers: { Authorization: `Bearer ${cfToken}` } }
+            );
+            if (existingRes.ok) {
+              pagesResult = { name: repoName, already_exists: true };
+            } else {
+              const pagesRes = await fetch(
+                `https://api.cloudflare.com/client/v4/accounts/${cfAccountId}/pages/projects`,
+                {
+                  method: "POST",
+                  headers: {
+                    Authorization: `Bearer ${cfToken}`,
+                    "Content-Type": "application/json",
+                  },
+                  body: JSON.stringify({
+                    name: repoName,
+                    production_branch: "main",
+                    source: {
+                      type: "github",
+                      config: {
+                        owner: repo.split("/")[0],
+                        repo_name: repoName,
+                        production_branch: "main",
+                        pr_comments_enabled: true,
+                        deployments_enabled: true,
+                        production_deployment_enabled: true,
+                        preview_deployment_setting: "all",
+                      },
+                    },
+                    build_config: {
+                      build_command: "pnpm build",
+                      destination_dir: "dist",
+                      root_dir: "apps/web",
+                    },
+                  }),
+                }
+              );
+              const pagesData = (await pagesRes.json()) as {
+                success: boolean;
+                result?: { name: string; subdomain: string; domains: string[] };
+                errors?: Array<{ code: number; message: string }>;
+              };
+              if (pagesData.success && pagesData.result) {
+                pagesResult = {
+                  name: pagesData.result.name,
+                  url: `https://${pagesData.result.subdomain}`,
+                  domains: pagesData.result.domains,
+                  auto_deploy: true,
+                };
+              } else {
+                pagesResult = {
+                  error: "Pages project creation failed",
+                  details: pagesData.errors?.map((e) => `${e.code}: ${e.message}`).join("; "),
+                };
+              }
+            }
+          } catch (pagesErr) {
+            pagesResult = {
+              error: "Pages API call failed",
+              details: pagesErr instanceof Error ? pagesErr.message : String(pagesErr),
+            };
+          }
+        }
+
+        return text(
+          JSON.stringify({
+            ok: true,
+            repo,
+            secrets_set: ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"],
+            pages_project: pagesResult,
+          })
+        );
+      },
+    },
+    {
       name: "github.pr-checks",
       description:
         `Get check runs, deployment statuses, and deploy preview URLs for a pull request. Use this when checking on a dev task PR or any PR to see CI status and Cloudflare Pages preview links.`,
